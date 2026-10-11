@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import re
+import unicodedata
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
@@ -328,6 +329,22 @@ def file_piece(summary, kind, path, start):
     return {'kind':kind,'path':path,'start':start,'sha256':expected,'text':h.redact(''.join(lines)),'next_start':start+len(lines) if lines else None}
 
 
+JSON_PAGE_CHARS = 8000   # well under the CLIs' command-output truncation limits
+
+
+def json_page(kind, data, offset):
+    """One page of pretty-printed JSON; pages concatenate back to the exact text."""
+    text = json.dumps(h.redact_data(data), ensure_ascii=False, indent=2)
+    h.require(type(offset) is int and 0 <= offset <= len(text), 'offset 无效')
+    end = min(offset + JSON_PAGE_CHARS, len(text))
+    if end < len(text):
+        # Prefer to stop at a line break so each page stays readable.
+        cut = text.rfind('\n', offset, end)
+        end = cut + 1 if cut > offset else end
+    return {'kind': kind, 'offset': offset, 'total_chars': len(text), 'text': text[offset:end],
+            'next_offset': end if end < len(text) else None}
+
+
 def lookup(args):
     manifest = read_json(args.manifest)
     h.require(digest_file(manifest['report']) == manifest['report_sha256'],
@@ -338,12 +355,12 @@ def lookup(args):
     report = read_json(manifest['report'])
     summary = read_json(manifest['summary'])
     if args.action == 'summary':
-        return h.redact_data(summary)
+        return json_page('summary', summary, args.offset)
     if args.action == 'policy':
         policy_path = args.manifest.parent / 'policy.json'
         h.require(digest_file(policy_path) == manifest['policy_sha256'],
                   '汇总策略已改变，请重新准备分析')
-        return h.redact_data(read_json(policy_path))
+        return json_page('policy', read_json(policy_path), args.offset)
     if args.action in ('skill', 'rule'):
         return file_piece(summary, args.action, args.path, args.start)
     if args.action == 'skill-sessions':
@@ -380,6 +397,7 @@ def string_list(value, name, allow_empty=True):
 
 ESCAPE = re.compile(r'\\(["\\/bfnrt]|u[0-9a-fA-F]{4})')
 ESCAPES = {'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t'}
+LIST_MARKER = re.compile(r'^[ \t]*(?:[-*+•]|\d{1,3}[.)、])[ \t]+', re.M)
 TYPOGRAPHIC = str.maketrans({'“': '"', '”': '"', '„': '"', '‘': "'", '’': "'", '`': None})
 
 
@@ -388,15 +406,21 @@ def squash(text):
 
     History pieces are raw JSON lines whose tool output may itself be JSON, so text is escaped
     one or more times; models quote the decoded text. Escapes are undone on both sides, curly
-    quotes become straight, Markdown backticks are dropped and whitespace runs become one space.
-    Wording still has to match exactly.
+    quotes become straight, Markdown backticks and all whitespace are dropped (a quote that joins
+    two lines often loses the line break, notably between CJK sentences).
+    Markdown list markers at line starts ("- ", "5. ") are dropped too, so a quote that joins
+    list items still matches. Wording still has to match exactly.
     """
     for _ in range(4):
         decoded = ESCAPE.sub(lambda m: chr(int(m[1][1:], 16)) if m[1][0] == 'u' else ESCAPES.get(m[1], m[1]), text)
         if decoded == text:
             break
         text = decoded
-    return re.sub(r'\s+', ' ', text.translate(TYPOGRAPHIC)).strip()
+    # NFKC folds full-width punctuation (，；：（）！) into ASCII; models often swap the two.
+    text = unicodedata.normalize('NFKC', text)
+    # Markdown emphasis (**bold**, __bold__) is formatting, like the backticks dropped above.
+    text = re.sub(r'\*\*|__', '', LIST_MARKER.sub('', text.translate(TYPOGRAPHIC)))
+    return re.sub(r'\s+', '', text)
 
 
 def trim_ellipsis(text):
@@ -416,6 +440,35 @@ def validate_evidence(evidence, finding, report, summary, known, field='evidence
             errors.append(f'{field}[{index}] {detail}')
     h.require(not errors, ' | '.join(errors))
     return kinds
+
+
+def relocate(e, quote, report, summary):
+    """Point e at the part/start where quote really is; sets e['_located'] to that text, or leaves it unset."""
+    target = squash(quote)
+    if e['kind'] == 'history':
+        events = list(session_events(report, e['session']))
+        named = [x for x in events if x['event_id'] == e['event_id']]
+        # The cited event first; if the id is unknown, any event of the same session whose id
+        # starts with it, then the whole session. The quote must still occur verbatim.
+        prefixed = [x for x in events if isinstance(e['event_id'], str) and x['event_id'].startswith(e['event_id'])]
+        for candidates in (named, prefixed if not named else [], events if not named else []):
+            hits = []
+            for event in candidates:
+                text = event_text(event)
+                for part in range(0, max(1, -(-len(text) // 1600))):
+                    window = text[part * 1600:(part + 2) * 1600]
+                    if target in squash(window):
+                        hits.append((event['event_id'], part, window));break
+            if len(hits) == 1 or (hits and candidates is named):
+                e['event_id'], e['part'], e['_located'] = hits[0]
+                return
+    else:
+        lines = h.redact(Path(e['path']).read_text(encoding='utf-8')).splitlines(keepends=True)
+        for start in range(1, len(lines) + 1):
+            window = ''.join(lines[start - 1:start + 39])
+            if target in squash(window):
+                e['start'], e['_located'] = start, window
+                return
 
 
 def check_evidence(e, finding, report, summary, known):
@@ -439,15 +492,30 @@ def check_evidence(e, finding, report, summary, known):
         h.require(finding['category'] == 'add' or
                   any(r.get('skill') in finding['skills'] and session_key(r) == e['session']
                       for r in report['extraction']['reads']), '历史会话未关联建议Skill')
-        piece = history_piece(report, e['session'], e['event_id'], e['part'])
+        try:
+            piece = history_piece(report, e['session'], e['event_id'], e['part'])
+        except h.HistoryError:
+            # Models shorten event ids or paste a read_id instead; the quote decides which event it is.
+            piece = {'text': ''}
     quote = trim_ellipsis(e['quote']) if isinstance(e['quote'], str) else None
+    if quote is not None and 8 <= len(quote) <= 600 and squash(quote) not in squash(piece['text']):
+        # Models often cite the right event or file with the wrong part/start (or a quote that
+        # crosses a page edge). The text is still verbatim evidence, so locate it and fix the pointer.
+        relocate(e, quote, report, summary)
+        piece = {'text': e.pop('_located', '')}
     h.require(quote is not None and 8 <= len(quote) <= 600 and squash(quote) in squash(piece['text']),
               '证据摘录不匹配或长度不合规：'+json.dumps(e.get('quote'),ensure_ascii=False)[:80]
-              +'（须是工具返回文本中连续的原文8–600字，措辞不可改写；转义/引号/反引号/空白差异已忽略；中间不可用省略号拼接，需省略时拆成多条证据）')
+              +'（须是工具返回文本中连续的原文8–600字，措辞不可改写；转义/引号/反引号/加粗符号/空白/行首列表符号/全角半角标点差异已忽略；中间不可用省略号拼接，需省略时拆成多条证据）')
     return kind
 
 
-def validate(result, report, summary):
+def validate(result, report, summary, mark_invalid=False):
+    """Strict check of an analysis draft; every finding gets a `validation` verdict.
+
+    With mark_invalid, findings that fail are kept and marked validation.status=failed (with the
+    reasons) instead of failing the whole draft, since a mechanical check can itself be wrong.
+    Top-level errors still raise.
+    """
     h.require(isinstance(result, dict) and set(result) == {'status', 'overview', 'uncovered', 'findings'},
               '分析输出顶层字段错误')
     h.require(result['status'] in ('complete', 'partial'), 'status 应为 complete/partial')
@@ -463,8 +531,12 @@ def validate(result, report, summary):
                                              'improve_trigger', 'update_script'},
                'merge': {'merge'}, 'retire': {'retire'}, 'add': {'add'}}
 
+    def adjust(f, note):
+        f['limitation'] = f['limitation'].rstrip() + f'（校验自动调整：{note}）'
+
     def check(f):
-        h.require(isinstance(f, dict) and set(f) == fields, 'summary-v2建议字段错误')
+        # `validation` is written by this function, never trusted from the model.
+        h.require(isinstance(f, dict) and set(f) - {'validation'} == fields, 'summary-v2建议字段错误')
         h.require(isinstance(f['category'], str) and f['category'] in actions, '建议分类错误')
         h.require(isinstance(f['change_kind'], str) and f['change_kind'] in actions[f['category']],
                   '分类与change_kind不一致')
@@ -491,6 +563,14 @@ def validate(result, report, summary):
             h.require(any(k != 'statistic' for k in kinds), '不能仅凭频次提出修改建议')
         history_sessions = {e['session'] for e in f['evidence'] if e['kind'] == 'history'}
         string_list(f['supporting_sessions'], 'supporting_sessions')
+        # supporting_sessions is derived from the evidence: drop unproven sessions, add cited ones,
+        # and say so in the finding instead of rejecting it.
+        unproven = sorted(set(f['supporting_sessions']) - history_sessions)
+        missing = sorted(history_sessions - set(f['supporting_sessions']))
+        if unproven or missing:
+            f['supporting_sessions'] = sorted(history_sessions)
+            adjust(f, '支持会话按历史证据重算' + (f'，移除无证据会话 {len(unproven)} 个' if unproven else '')
+                   + (f'，补入已引用会话 {len(missing)} 个' if missing else ''))
         h.require(len(set(f['supporting_sessions'])) == len(f['supporting_sessions']) and
                   set(f['supporting_sessions']) == history_sessions,
                   '支持会话必须与历史证据一致：'
@@ -517,9 +597,11 @@ def validate(result, report, summary):
                 h.require(current['status'] == 'present' and c['sha256'] == current.get('sha256') and
                           isinstance(c['sha256'], str), '当前版本哈希不符')
                 h.require(digest_file(c['skill']) == c['sha256'], '当前正文已改变，请重新准备分析')
-                h.require(any(e['kind'] == 'skill' and e['path'] == c['skill']
-                              for e in f['evidence'] + f['counter_evidence']),
-                          '当前核对必须引用该Skill正文证据')
+                if not any(e['kind'] == 'skill' and e['path'] == c['skill']
+                           for e in f['evidence'] + f['counter_evidence']):
+                    # A claim about the current text without quoting it is unverified, not wrong.
+                    c.update(status='unavailable', sha256=None)
+                    adjust(f, f'{Path(c["skill"]).parent.name} 的当前核对未引用正文，降为 unavailable')
         h.require(f['category'] == 'retain' or not checks or
                   not all(c['status'] == 'already_fixed' for c in checks),
                   '全部已修复的历史问题不能作为待修改建议')
@@ -560,15 +642,51 @@ def validate(result, report, summary):
         except (ValueError, KeyError, TypeError) as exc:
             title = f.get('title') if isinstance(f, dict) else None
             detail = str(exc) if isinstance(exc, ValueError) else f'{type(exc).__name__}: {exc}'
-            errors.append(f'第{index + 1}条「{str(title)[:30]}」{detail}')
-    h.require(not errors, '；'.join(errors))
-    return result
+            errors.append((index, f'第{index + 1}条「{str(title)[:30]}」', detail))
+    if not mark_invalid:
+        h.require(not errors, '；'.join(prefix + detail for _, prefix, detail in errors))
+    failed = {index: detail for index, _, detail in errors}
+    for index, f in enumerate(result['findings']):
+        if isinstance(f, dict):
+            f['validation'] = ({'status': 'failed', 'errors': failed[index].split(' | ')}
+                               if index in failed else {'status': 'passed'})
+    if not failed:
+        return result
+    return {**result, 'status': 'partial',
+            'uncovered': result['uncovered'] + [f'{len(failed)} 条建议未通过程序证据校验，已保留并标记「校验未通过」，请人工核对其证据']}
+
+
+def failed_count(result):
+    return sum(1 for f in result['findings'] if f.get('validation', {}).get('status') == 'failed')
+
+
+def salvage(state, report, summary):
+    """Once attempts run out, use the draft with the most verified findings; mark the rest."""
+    best = None
+    for draft in sorted(state.glob('draft-*.txt'), key=attempt_number):
+        try:
+            kept = validate(h.strict_json(draft.read_text(encoding='utf-8')), report, summary, mark_invalid=True)
+        except (ValueError, KeyError, TypeError, OSError):
+            continue
+        passed = len(kept['findings']) - failed_count(kept)
+        # Most verified findings wins; ties go to the later (repaired) draft.
+        if best is None or (passed, -failed_count(kept)) >= best[2]:
+            best = (kept, draft, (passed, -failed_count(kept)))
+    if best is None:
+        return None, {}
+    kept, draft, _ = best
+    meta_path = state/f'attempt-{attempt_number(draft)}.json'
+    return kept, {**(read_json(meta_path) if meta_path.exists() else {}), 'draft': draft.name, 'salvaged': True}
 
 
 def markdown(result):
     lines=['# Skill 汇总分析','',result['overview'],'']
     for f in result['findings']:
-        lines += ['## '+f['title'],'',f"类别：{f['category']} · 优先级：{f['priority']} · 置信度：{f['confidence']}",'',f['observation'],'',f['recommendation'],'','限制：'+f['limitation'],'','验证：'+f['verification'],'','证据：',*['- '+json.dumps(e,ensure_ascii=False) for e in f['evidence']],'']
+        check=f.get('validation') or {}
+        lines += ['## '+f['title']+(' 【校验未通过】' if check.get('status')=='failed' else ''),'',
+                  *(['> 程序证据校验未通过（可能是模型引用不实，也可能是校验误判），请人工核对：',
+                     *['> - '+x for x in check.get('errors',[])],''] if check.get('status')=='failed' else []),
+                  f"类别：{f['category']} · 优先级：{f['priority']} · 置信度：{f['confidence']}",'',f['observation'],'',f['recommendation'],'','限制：'+f['limitation'],'','验证：'+f['verification'],'','证据：',*['- '+json.dumps(e,ensure_ascii=False) for e in f['evidence']],'']
         if 'change_kind' in f:
             lines += ['动作：'+f['change_kind']+' · 原因归属：'+f['attribution'],'',
                       '当前核对：'+json.dumps(f['current_check'],ensure_ascii=False),'',
@@ -637,15 +755,23 @@ def run(args,cli):
     entry=Path(cli.__file__).resolve()
     if not entry.is_file():entry=entry.parent
     helper=shlex.join([sys.executable,str(entry),'analysis-read',str(state/'manifest.json')])
-    prompt=('你是 Skill 汇总治理总控 Agent。先执行下面的 summary_read 和 policy_read 命令获取统计摘要和汇总策略；仅输出策略中 output_example 的结构，不输出Markdown围栏。'
+    # Backends with a native file tool read the two files directly (paged by offset/limit);
+    # the rest page through them with the helper, which a shell-only agent can always run.
+    if 'file_read' in backend.capabilities:
+        bootstrap=('先用 Read 工具读取工作目录中的 summary.json 和 policy.json，文件较大时用 offset/limit 分段（每次不超过 400 行），'
+                   '读到文件末尾为止；Read 失败时改用下面的 summary_read/policy_read 命令。')
+    else:
+        bootstrap=('先执行下面的 summary_read 和 policy_read 命令获取统计摘要和汇总策略；结果按页返回，'
+                   'next_offset 不为 null 时把命令末尾的 0 换成该值继续读，直到 next_offset 为 null，各页 text 按顺序拼接即完整 JSON。')
+    prompt=('你是 Skill 汇总治理总控 Agent。'+bootstrap+'仅输出策略中 output_example 的结构，不输出Markdown围栏。'
         +('允许自主创建子代理；按候选Skill/问题分治，禁止逐会话全量派发。' if delegation else
           '当前执行后端不支持原生子代理：由你一人按候选Skill/问题分批取证，忽略策略中关于创建子代理的说明。')
         +'不要改文件。\n'
         +'取证规则（子代理同样适用，派发时原样转告）：Bash 只能单行执行下面给出的命令，原样复制命令前缀再接参数；'
-          '不要用变量赋值、换行、管道、&&、;、heredoc，否则会被拒绝。摘要、策略、Skill和规则正文均通过下面的命令获取，不依赖专用Read工具。'
-          'quote 必须是工具返回文本中连续的原文（8–600字），按显示出来的文字抄写即可，转义符、中英文引号、反引号和空白差异会被忽略，措辞不能改；需要跳过中间内容时拆成多条证据，不要用省略号连接。'
+          '不要用变量赋值、换行、管道、&&、;、heredoc，否则会被拒绝。Skill和规则正文只能用 skill_read/rule_read 获取（工作目录外的文件读不到）。'
+          'quote 必须是工具返回文本中连续的原文（8–600字），按显示出来的文字抄写即可，转义符、中英文引号、全角半角标点、反引号、Markdown 加粗符号、空白和行首列表符号（- 、1. ）差异会被忽略，措辞不能改；需要跳过中间内容时拆成多条证据，不要用省略号连接。'
           '最终回复只包含一个 JSON 对象，前后不要有任何说明文字。\n'
-        +json.dumps({'summary_read':helper+' summary','policy_read':helper+' policy',
+        +json.dumps({'summary_read':helper+' summary --offset 0','policy_read':helper+' policy --offset 0',
             'skill_read':helper+' skill --path <白名单路径> --start 1',
             'rule_read':helper+' rule --path <规则路径> --start 1',
             'search_in_session':helper+' search --session <source:id> --query <关键词> --limit 5 --offset 0',
@@ -675,7 +801,9 @@ def run(args,cli):
                  +(f'；子代理模型：{plan.subagent_model or "未固定"}' if delegation else '')+'。')
         control=codex_process.Control();secrets=list(plan.secrets)
         # Numbering continues across resumes so earlier drafts and traces are kept.
-        first=max([attempt_number(x) for x in state.glob('draft-*.txt')],default=0)+1
+        # Attempts that died before writing a draft still left a trace, so count those too.
+        used=[*state.glob('draft-*.txt'),*state.glob('events-*.jsonl')]
+        first=max([attempt_number(x) for x in used],default=0)+1
         try:
             for number in range(first,first+args.attempts):
                 try:
@@ -692,14 +820,25 @@ def run(args,cli):
                     pipeline.atomic(state/'error.json',{'attempt':number,'error':error})
                     print('分析未通过：'+error,file=sys.stderr)
                     if isinstance(exc,cli.AuditTimeout):break
-                    prompt+=repair_hint(error,state/f'draft-{number}.txt')
+                    draft=state/f'draft-{number}.txt'
+                    # No draft means the backend itself failed (e.g. a dropped connection):
+                    # retry the original task instead of asking the model to repair nothing.
+                    if draft.exists():prompt+=repair_hint(error,draft)
         except (KeyboardInterrupt,codex_process.Cancelled):
             control.cancel();pipeline.atomic(state/'cancelled.json',{'status':'cancelled'})
             print('已取消，摘要与已有草稿保留。续跑：skill-audit history --resume '+shlex.quote(str(state)),file=sys.stderr);return 130
     if result is None:
-        print('未完成分析；原统计报告保持不变。续跑：skill-audit history --resume '+shlex.quote(str(state)),file=sys.stderr);return 2
+        # Attempts are used up: rather than lose the run, keep what the best draft can prove.
+        result,salvaged=salvage(state,report,summary)
+        if result is not None:
+            meta,outcome={**salvaged,'plan':salvaged.get('plan') or plan.record()},None
+            print(f"重试次数用尽：采用 {salvaged['draft']}，其中 {failed_count(result)} 条建议未通过证据校验，已保留并标记「校验未通过」。",file=sys.stderr)
+    if result is None:
+        print('未完成分析（没有可用草稿）；原统计报告保持不变。续跑：skill-audit history --resume '+shlex.quote(str(state)),file=sys.stderr);return 2
     notes=list(plan.notes)
-    if outcome is None:
+    if meta.get('salvaged'):
+        notes.append(f"重试用尽后采用 {meta['draft']}；未通过证据校验的建议已保留并标记，需人工核对")
+    elif outcome is None:
         notes.append(f"结果来自续跑时复核的 {meta['draft']}，未重新请求模型"+('' if 'plan' in meta else '；该草稿未记录实际模型，见同编号 events 轨迹'))
     artifact={**result,'kind':'history_analysis','schema_version':VERSION,'generated_at':datetime.now(timezone.utc).isoformat(),
         'input_sha256':manifest['report_sha256'],'model':(meta.get('plan') or plan.record())['model'],'input_report':str(path),

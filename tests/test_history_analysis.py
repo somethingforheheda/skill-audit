@@ -1,3 +1,4 @@
+import io
 import copy
 import json
 import shlex
@@ -34,20 +35,43 @@ class AnalysisTests(unittest.TestCase):
         summary=a.read_json(state/'summary.json')
         self.assertEqual(summary['skills'][0]['reads'],0)
         self.assertEqual(summary['skills'][0]['current']['status'],'present')
+    def read_pages(self, command):
+        """Run a paged summary/policy command the way the prompt tells a shell-only agent to."""
+        text, offset = '', 0
+        while offset is not None:
+            argv = shlex.split(command)[:-1] + [str(offset)]
+            result = subprocess.run(argv, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            page = json.loads(result.stdout)
+            self.assertLessEqual(len(page['text']), a.JSON_PAGE_CHARS)
+            text, offset = text + page['text'], page['next_offset']
+        return json.loads(text)
     def test_bootstrap_context_commands_without_read_tool(self):
         def fake_codex(binary, data, root, prompt, timeout, control=None, **kwargs):
             commands = json.loads(next(line for line in prompt.splitlines() if line.startswith('{"summary_read"')))
-            outputs = {}
-            for name in ('summary_read', 'policy_read'):
-                result = subprocess.run(shlex.split(commands[name]), capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                outputs[name] = json.loads(result.stdout)
-            self.assertEqual(outputs['summary_read']['skills'][0]['skill'], str(self.skill))
-            self.assertEqual(outputs['policy_read'], a.POLICY)
-            self.assertIn('不依赖专用Read工具', prompt)
+            self.assertEqual(self.read_pages(commands['summary_read'])['skills'][0]['skill'], str(self.skill))
+            self.assertEqual(self.read_pages(commands['policy_read']), a.POLICY)
+            self.assertIn('next_offset', prompt); self.assertNotIn('Read 工具读取', prompt)
             return json.dumps(self.result())
         with patch.object(codex_backend,'codex_binary',return_value='fake'),patch.object(codex_backend,'config_get',return_value={'model':'fixture','token_env':'NO_REAL_KEY'}),patch.object(codex_backend,'token_present'),patch.object(codex_backend,'run_codex',side_effect=fake_codex):
             self.assertEqual(a.run(self.args(),cli),0)
+    def test_file_read_backend_bootstraps_with_read_tool(self):
+        args=self.args(backend='claude');args.prepare_only=True
+        self.assertEqual(a.run(args,cli),0)
+        prompt=next((self.root/'analysis-runs').iterdir()).joinpath('prompt.txt').read_text()
+        self.assertIn('Read 工具读取工作目录中的 summary.json', prompt)
+        self.assertIn('offset/limit', prompt); self.assertIn('summary --offset 0', prompt)
+    def test_json_pages_are_bounded_and_lossless(self):
+        data={'skills':[{'skill':f'/repo/skills/s{i}/SKILL.md','note':'中文说明'*30} for i in range(300)],
+              'long_line':'x'*(a.JSON_PAGE_CHARS*2+17)}
+        full=json.dumps(data,ensure_ascii=False,indent=2);self.assertGreater(len(full),60000)
+        text,offset,pages='',0,0
+        while offset is not None:
+            page=a.json_page('summary',data,offset);pages+=1
+            self.assertLessEqual(len(page['text']),a.JSON_PAGE_CHARS);self.assertEqual(page['total_chars'],len(full))
+            text,offset=text+page['text'],page['next_offset']
+        self.assertEqual(text,full);self.assertGreater(pages,8)
+        with self.assertRaises(ValueError):a.json_page('summary',data,len(full)+1)
 
     def test_bootstrap_context_rejects_changed_files(self):
         args=self.args();args.prepare_only=True;a.run(args,cli)
@@ -78,6 +102,13 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual(a.run(self.args(),cli),0)
         self.assertEqual(run.call_count,2)
         self.assertIn('上次校验错误',run.call_args.args[3])
+    def test_backend_failure_retries_without_repair_hint(self):
+        failure=cli.AuditError('Codex 退出码 1；stream disconnected before completion')
+        with patch.object(codex_backend,'codex_binary',return_value='fake'),patch.object(codex_backend,'config_get',return_value={'model':'fixture','token_env':'NO_REAL_KEY'}),patch.object(codex_backend,'token_present'),patch.object(codex_backend,'run_codex',side_effect=[failure,json.dumps(self.result())]) as run:
+            self.assertEqual(a.run(self.args(),cli),0)
+        first,second=(c.args[3] for c in run.call_args_list)
+        self.assertEqual(first,second)
+        self.assertNotIn('上一稿',second)
     def test_evidence_and_false_statistics(self):
         summary=a.make_summary(self.report)
         f={'attribution':'skill','change_kind':'clarify_boundary','current_check':[{'skill':str(self.skill),'status':'still_applicable','sha256':summary['skills'][0]['current']['sha256']}],'supporting_sessions':[],'counter_evidence':[],'target':None,'regression_case':{'task':'fixture','expected':['observable behavior'],'forbidden':[],'verification':'fixture'},'category':'improve','skills':[str(self.skill)],'priority':'high','title':'fixture','observation':'fixture','recommendation':'fixture','confidence':'low','limitation':'fixture','verification':'fixture','evidence':[{'kind':'skill','path':str(self.skill),'start':1,'quote':'Example skill description'}]}
@@ -198,6 +229,36 @@ class AnalysisTests(unittest.TestCase):
         f['supporting_sessions'].append('codex:a')
         with self.assertRaises(ValueError):a.validate(result,self.report,summary)
 
+    def test_derivable_fields_corrected_not_rejected(self):
+        summary=self.snapshots();f=self.finding(summary)
+        f['evidence'].append({'kind':'history','session':'codex:a','event_id':'a4','part':0,'quote':'wrong approach: use the root command'})
+        f['supporting_sessions']=['codex:b'];f['category'],f['change_kind'],f['regression_case']='retain','none',None
+        f['evidence']=[x for x in f['evidence'] if x['kind']!='skill']
+        result=self.result();result['findings']=[f]
+        a.validate(result,self.report,summary)
+        self.assertEqual(f['supporting_sessions'],['codex:a'])
+        self.assertEqual((f['current_check'][0]['status'],f['current_check'][0]['sha256']),('unavailable',None))
+        self.assertIn('校验自动调整',f['limitation'])
+    def test_history_quote_with_shortened_or_wrong_event_id_is_resolved(self):
+        summary=self.snapshots();f=self.finding(summary)
+        e={'kind':'history','session':'codex:a','event_id':'a','part':3,'quote':'wrong approach: use the root command'}
+        f['evidence'].append(e);f['supporting_sessions']=['codex:a'];result=self.result();result['findings']=[f]
+        a.validate(result,self.report,summary)
+        self.assertEqual((e['event_id'],e['part']),('a4',0))
+        e.update(event_id='not-an-event',quote='the corrected task is now successful')
+        a.validate(result,self.report,summary);self.assertEqual(e['event_id'],'a5')
+        e.update(event_id='not-an-event',quote='an invented history sentence')
+        with self.assertRaisesRegex(ValueError,'证据摘录不匹配'):a.validate(result,self.report,summary)
+    def test_quote_with_wrong_part_or_start_is_relocated(self):
+        summary=self.snapshots();f=self.finding(summary)
+        long='\n'.join(f'line {i} filler text' for i in range(60))+'\nUnique closing instruction here.'
+        self.skill.write_text(long);summary=a.make_summary(self.report)
+        f=self.finding(summary);f['evidence'][0]['quote']='Unique closing instruction here.'
+        result=self.result();result['findings']=[f]
+        a.validate(result,self.report,summary)
+        self.assertEqual(f['evidence'][0]['start'],22)
+        f['evidence'][0]['quote']='Invented closing instruction here.'
+        with self.assertRaisesRegex(ValueError,'证据摘录不匹配'):a.validate(result,self.report,summary)
     def test_already_fixed_not_actionable_counter_evidence_validated(self):
         summary=self.snapshots();f=self.finding(summary);result=self.result();result['findings']=[f]
         f['current_check'][0]['status']='already_fixed'
@@ -293,7 +354,48 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn('上次校验错误：分析输出顶层字段错误',prompt);self.assertIn(str(state/'draft-1.txt'),prompt)
         self.assertTrue((state/'draft-1.txt').exists() and (state/'draft-2.txt').exists())
         self.assertEqual(a.read_json(state/'attempt-2.json')['draft'],'draft-2.txt')
+        # A failed attempt without a draft keeps its trace; the next run must not overwrite it.
+        (state/'events-3.jsonl').write_text('{}')
+        stack,run=self.patched(return_value=json.dumps(self.result()))
+        (state/'draft-2.txt').write_text('{}')
+        with stack:self.assertEqual(a.run(args,cli),0)
+        self.assertEqual((state/'events-3.jsonl').read_text(),'{}');self.assertTrue((state/'draft-4.txt').exists())
 
+    def test_exhausted_attempts_mark_failed_findings_instead_of_dropping(self):
+        summary=a.make_summary(self.report);good=self.finding(summary)
+        bad=copy.deepcopy(good);bad['title']='bad';bad['evidence'][0]['quote']='invented evidence text'
+        result=self.result();result['findings']=[good,bad]
+        stack,run=self.patched(return_value=json.dumps(result))
+        with stack,patch('sys.stderr',new_callable=io.StringIO) as err:self.assertEqual(a.run(self.args(),cli),2)
+        self.assertEqual(run.call_count,2);self.assertIn('1 条建议未通过证据校验，已保留并标记',err.getvalue())
+        saved=a.read_json(self.root/'analysis.json')
+        self.assertEqual([f['title'] for f in saved['findings']],['fixture','bad'])
+        self.assertEqual([f['validation']['status'] for f in saved['findings']],['passed','failed'])
+        self.assertIn('证据摘录不匹配',saved['findings'][1]['validation']['errors'][0])
+        self.assertEqual(saved['status'],'partial')
+        self.assertTrue(any('已保留并标记「校验未通过」' in x for x in saved['uncovered']))
+        self.assertTrue(any('重试用尽' in n for n in saved['coverage']['notes']))
+        self.assertIn('【校验未通过】',(self.root/'analysis.md').read_text())
+        self.assertIn('校验未通过',(self.root/'report.html').read_text())
+    def test_model_cannot_self_certify_validation(self):
+        summary=a.make_summary(self.report);f=self.finding(summary)
+        f['evidence'][0]['quote']='invented evidence text';f['validation']={'status':'passed'}
+        result=self.result();result['findings']=[f]
+        with self.assertRaisesRegex(ValueError,'证据摘录不匹配'):a.validate(copy.deepcopy(result),self.report,summary)
+        marked=a.validate(result,self.report,summary,mark_invalid=True)
+        self.assertEqual(marked['findings'][0]['validation']['status'],'failed')
+    def test_unusable_drafts_still_report_unfinished(self):
+        stack,run=self.patched(return_value='not json')
+        with stack:self.assertEqual(a.run(self.args(),cli),2)
+        self.assertFalse((self.root/'analysis.json').exists())
+    def test_list_markers_ignored_in_quotes(self):
+        source='4. 按“阻断问题优先”的顺序输出结论。\n5. 不要给无关风格建议\n- 构建失败 → 重试'
+        self.assertIn(a.squash('按"阻断问题优先"的顺序输出结论。不要给无关风格建议 构建失败 → 重试'),a.squash(source))
+        self.assertNotIn(a.squash('按"阻断问题优先"的顺序输出结论。不要给风格建议'),a.squash(source))
+        self.assertEqual(a.squash('版本 1.2 和 v5. 结尾'),'版本1.2和v5.结尾')
+        self.assertEqual(a.squash('显示 41 个子仓检查成功，未修改；见（附录）：完成'),a.squash('显示 41 个子仓检查成功,未修改;见(附录):完成'))
+        self.assertNotEqual(a.squash('检查成功，未修改'),a.squash('检查完成,未修改'))
+        self.assertIn(a.squash('skill 不动 version.properties,只改 version'),a.squash('bump，**skill 不动 version.properties**，只改 `version`'))
     def test_quote_matches_decoded_history_text(self):
         summary=self.snapshots();f=self.finding(summary)
         # Event text is a JSON line whose payload holds escaped tool output (two escape levels).

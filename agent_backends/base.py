@@ -29,6 +29,7 @@ CAPABILITIES = {
     'subagent_model': '可固定子代理模型',
     'model_attestation': '运行后可报告实际使用的模型',
     'command_allowlist': '可执行指定的只读命令入口',
+    'file_read': '原生只读文件工具，可分段读取工作目录内的文件',
     'trace': '运行事件落盘',
     'ephemeral': '不写入本机会话历史',
 }

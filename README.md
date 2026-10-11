@@ -63,7 +63,7 @@ caffeinate -i skill-audit history --skills-root .agents/skills --limit 30 \
 
 1. **纯脚本采集**：读取本机 `~/.claude/projects`、`~/.codex`、`~/.comate-engine/store`（`--sources`、`--history-home` 可调）中工作目录为当前项目的最近 N 个会话（`--limit`，默认 20；`--days`/`--from`/`--to` 限时间，`--all-projects` 不限项目），脱敏后存为本地快照，确定性统计每次 Skill 正文读取。`--collect-only` 只做这一步，不需要模型。
 2. **AI 汇总**：一个总控 Agent（可自行派子代理）读统计摘要，通过只读的 `analysis-read` 工具按需取证，输出改进建议：归因、动作类型、当前正文核对、支持/反例证据、回归案例草稿。
-3. **严格校验**：每条证据必须能在工具返回原文中逐字找到（忽略转义、引号与空白差异），统计值、会话与 Skill 正文哈希都要对得上；不合格则带着全部错误定向修复，最多 `--attempts` 次。
+3. **程序校验**（确定性规则，不调用模型）：每条证据必须能在工具返回原文中逐字找到（忽略转义、引号、全半角标点、空白、Markdown 加粗与列表符号差异；页码或事件 ID 写错时按原文自动定位），统计值、会话与 Skill 正文哈希都要对得上。不合格则带着全部错误定向修复，最多 `--attempts` 次；仍不合格的建议**不会删除**，在报告中标记「校验未通过」并列出原因，由人工判断（可能是模型引用不实，也可能是校验误判）。能从证据推出的字段（支持会话、未附正文的当前核对）直接纠正，并在该条「限制」中注明。
 
 产出在 `~/.skill-audit/reports/<项目>-<时间>-<随机>/`：`report.json`（采集统计）、`report.html`（离线页面）、`analysis.json`/`analysis.md`（AI 建议）、`snapshots/`（会话正文快照）、`analysis-runs/<运行ID>/`（摘要、提示词、草稿、校验错误）。
 

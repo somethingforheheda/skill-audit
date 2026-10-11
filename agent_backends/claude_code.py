@@ -132,6 +132,7 @@ class ClaudeCodeBackend(Backend):
         'subagent_model': 'CLAUDE_CODE_SUBAGENT_MODEL（--settings env）',
         'model_attestation': 'result.modelUsage',
         'command_allowlist': 'Bash(<前缀> *) 精确前缀，其余命令与复合命令被拒',
+        'file_read': 'Read 工具（offset/limit 分段）',
         'trace': 'stream-json 事件流',
         'ephemeral': '--no-session-persistence',
     }

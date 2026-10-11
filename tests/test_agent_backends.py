@@ -193,6 +193,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIn('agents.default_subagent_model="child"', commands[0])
         self.assertFalse(any('default_subagent_model' in part for part in commands[1]))
         self.assertEqual(commands[0][commands[0].index('-m') + 1], 'main')
+        self.assertIn('model_providers.skill_audit_gateway.stream_max_retries=3', commands[0])
 
     def test_rollout_models_read_from_private_home(self):
         with tempfile.TemporaryDirectory() as home:

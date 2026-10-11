@@ -1237,12 +1237,15 @@ function renderAnalysis(){
   var actions={none:'保留观察',add_example:'补充案例',fix_rule:'修订规则',clarify_boundary:'补充适用边界',improve_trigger:'改进触发描述',update_script:'修改辅助脚本',merge:'合并',retire:'淘汰候选',add:'新增候选'};
   var causes={skill:'Skill内容',agent:'Agent执行',environment:'环境',user_change:'需求变化',unknown:'无法确定'};
   var states={still_applicable:'当前仍适用',already_fixed:'当前已修复',unavailable:'未核对或不可用'};
+  var failedCount=(a.findings||[]).filter(function(f){return f.validation&&f.validation.status==='failed';}).length;
   host.innerHTML='<p>'+esc(a.overview)+'</p><p class="muted">'+esc(a.model||'')+' · '+esc(a.generated_at||'')+' · '+esc(a.status)+' · 不随统计筛选变化</p>'+
+    (failedCount?'<p><span class="badge crit">校验未通过 '+failedCount+' 条</span> 程序未能在原文中逐字核实这些建议引用的证据：可能是模型引用不实，也可能是校验误判，请展开对应建议人工核对。</p>':'')+
     ((a.findings||[]).length?'':'<p>本轮未提出改进建议，请结合未覆盖说明阅读。</p>')+
     (a.findings||[]).map(function(f){
-      var caseData=f.regression_case, checks=f.current_check||[];
-      return '<details style="margin:14px 0;border-top:1px solid var(--line);padding-top:12px"><summary>'+esc(categories[f.category]||f.category)+' · '+esc(f.title)+' · '+esc(f.confidence)+'</summary>'+
-        '<dl class="kv"><dt>具体问题</dt><dd>'+esc(f.observation)+'</dd><dt>建议修改</dt><dd>'+esc(f.recommendation)+'</dd>'+
+      var caseData=f.regression_case, checks=f.current_check||[], v=f.validation||{};
+      var badge=v.status==='failed'?' <span class="badge crit">校验未通过</span>':v.status==='passed'?' <span class="badge good">证据已核验</span>':'';
+      return '<details style="margin:14px 0;border-top:1px solid var(--line);padding-top:12px"><summary>'+esc(categories[f.category]||f.category)+' · '+esc(f.title)+' · '+esc(f.confidence)+badge+'</summary>'+
+        '<dl class="kv">'+(v.status==='failed'?'<dt>校验结果</dt><dd><p class="muted">程序证据校验未通过，以下为未能核实的原因；结论仍保留供人工判断。</p><ul>'+(v.errors||[]).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul></dd>':'')+'<dt>具体问题</dt><dd>'+esc(f.observation)+'</dd><dt>建议修改</dt><dd>'+esc(f.recommendation)+'</dd>'+
         (f.change_kind?'<dt>动作 / 原因归属</dt><dd>'+esc(actions[f.change_kind]||f.change_kind)+' / '+esc(causes[f.attribution]||f.attribution)+'</dd>':'')+
         '<dt>关联Skill</dt><dd>'+(f.skills||[]).map(function(path){
           var canFocus=D.skills.some(function(x){return x.path===path;});

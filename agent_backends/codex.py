@@ -18,6 +18,7 @@ from .base import AgentResult, AuditError, AuditTimeout, AuthMode, Backend, erro
 INSTALL_URL = "https://developers.openai.com/codex/cli"
 AUTH_ALIASES = {'chatgpt': 'native', 'company': 'gateway'}   # old names stay accepted
 PROVIDER = 'skill_audit_gateway'
+NETWORK_RETRIES = 3
 
 
 def codex_binary():
@@ -39,8 +40,10 @@ def codex_config(data):
         "-c", f'model_providers.{PROVIDER}.env_key={json.dumps(data["token_env"])}',
         "-c", f'model_providers.{PROVIDER}.wire_api="responses"',
         "-c", f"model_providers.{PROVIDER}.requires_openai_auth=false",
-        "-c", f"model_providers.{PROVIDER}.request_max_retries=0",
-        "-c", f"model_providers.{PROVIDER}.stream_max_retries=0",
+        # Let Codex reconnect a dropped model request/stream itself; this resends only that one
+        # request, so a flaky gateway no longer throws away the whole agent run.
+        "-c", f"model_providers.{PROVIDER}.request_max_retries={NETWORK_RETRIES}",
+        "-c", f"model_providers.{PROVIDER}.stream_max_retries={NETWORK_RETRIES}",
         "-c", 'approval_policy="never"',
     ]
 
