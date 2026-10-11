@@ -1,0 +1,1379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skill 使用证据报告</title>
+<style>
+/* ============================================================
+   tokens — 调色板来自 dataviz 参考实例，7 个分类槽位已跑验证器
+   skills → 槽位 1-4（按名称字母序，与排名无关）
+   sources → 槽位 5-7（按名称字母序）
+   ============================================================ */
+.viz-root{
+  color-scheme:light;
+  --surface-1:#fcfcfb; --plane:#f9f9f7; --sunk:#f3f2ee;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,0.10);
+  --wash:rgba(11,11,11,0.04);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+  --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948;
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  --good-ink:#006300;
+  --track:#cde2fb; --fill:#2a78d6;
+}
+@media (prefers-color-scheme: dark){
+  :root:where(:not([data-theme="light"])) .viz-root{
+    color-scheme:dark;
+    --surface-1:#1a1a19; --plane:#0d0d0d; --sunk:#151514;
+    --text-primary:#ffffff; --text-secondary:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+    --wash:rgba(255,255,255,0.05);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+    --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    --good-ink:#0ca30c;
+    --track:#104281; --fill:#3987e5;
+  }
+}
+:root[data-theme="dark"] .viz-root{
+  color-scheme:dark;
+  --surface-1:#1a1a19; --plane:#0d0d0d; --sunk:#151514;
+  --text-primary:#ffffff; --text-secondary:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+  --wash:rgba(255,255,255,0.05);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+  --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+  --good-ink:#0ca30c;
+  --track:#104281; --fill:#3987e5;
+}
+/* ============================ base ============================ */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--plane,#f9f9f7)}
+.viz-root{
+  background:var(--plane); color:var(--text-primary);
+  font:14px/1.55 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  min-height:100vh; padding:0 0 64px;
+}
+.wrap{max-width:1240px;margin:0 auto;padding:0 28px}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-0.01em}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.num{font-variant-numeric:tabular-nums}
+.sec{margin-top:34px}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+.sec-head h2{font-size:15px}
+.sec-head .hint{font-size:12px;color:var(--muted)}
+.card{
+  background:var(--surface-1);border:1px solid var(--ring);border-radius:12px;
+  padding:18px 20px;
+}
+.grid{display:grid;gap:14px}
+.muted{color:var(--muted)}
+.sub{color:var(--text-secondary)}
+/* ============================ top bar ============================ */
+.top{border-bottom:1px solid var(--ring);background:var(--surface-1)}
+.top-in{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:22px 28px 18px;max-width:1240px;margin:0 auto}
+.top h1{font-size:19px}
+.top .path{margin-top:5px;font-size:12px;color:var(--text-secondary);word-break:break-all}
+.top-actions{display:flex;gap:8px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+.btn{
+  font:inherit;font-size:12px;line-height:1;color:var(--text-secondary);
+  background:transparent;border:1px solid var(--ring);border-radius:999px;
+  padding:7px 13px;cursor:pointer;white-space:nowrap;
+}
+.btn:hover{background:var(--wash);color:var(--text-primary)}
+.btn:focus-visible{outline:2px solid var(--s1);outline-offset:2px}
+.btn[aria-pressed="true"]{background:var(--text-primary);color:var(--surface-1);border-color:var(--text-primary)}
+/* ============================ meta strip ============================ */
+.metastrip{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--ring);border-radius:12px;background:var(--surface-1);overflow:hidden;margin-top:18px}
+.metastrip .m{flex:1 1 150px;padding:12px 16px;border-right:1px solid var(--ring)}
+.metastrip .m:last-child{border-right:0}
+.metastrip .k{font-size:11px;color:var(--muted);margin-bottom:3px}
+.metastrip .v{font-size:13px;color:var(--text-primary);word-break:break-all}
+/* ============================ filter row ============================ */
+.filters{
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;
+  margin-top:18px;padding:12px 16px;background:var(--surface-1);
+  border:1px solid var(--ring);border-radius:12px;position:sticky;top:0;z-index:30;
+}
+.fgroup{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.flabel{font-size:11px;color:var(--muted);margin-right:2px}
+.chip{
+  display:inline-flex;align-items:center;gap:7px;font:inherit;font-size:12px;
+  background:transparent;border:1px solid var(--ring);border-radius:999px;
+  padding:5px 12px 5px 9px;cursor:pointer;color:var(--text-secondary);
+}
+.chip:hover{background:var(--wash)}
+.chip:focus-visible{outline:2px solid var(--s1);outline-offset:2px}
+.chip .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.chip[aria-pressed="false"]{opacity:.45}
+.chip[aria-pressed="true"]{color:var(--text-primary);border-color:var(--axis)}
+.chip .n{color:var(--muted);font-variant-numeric:tabular-nums}
+.spacer{flex:1}
+/* ============================ hero + tiles ============================ */
+.hero-row{display:grid;grid-template-columns:minmax(260px,1.05fr) 2fr;gap:14px;align-items:stretch}
+.hero{display:flex;flex-direction:column;justify-content:center;gap:6px}
+.hero .lab{font-size:12px;color:var(--muted)}
+.hero .fig{font-size:60px;line-height:1;font-weight:600;letter-spacing:-0.03em}
+.hero .fig small{font-size:18px;font-weight:500;color:var(--text-secondary);margin-left:6px;letter-spacing:0}
+.hero .say{font-size:13px;color:var(--text-secondary);margin-top:4px}
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--ring);border:1px solid var(--ring);border-radius:12px;overflow:hidden}
+.tile{background:var(--surface-1);padding:14px 16px 15px}
+.tile .k{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:5px;min-height:16px}
+.tile .v{font-size:26px;font-weight:600;line-height:1.15;margin-top:6px}
+.tile .v em{font-style:normal;font-size:13px;font-weight:500;color:var(--text-secondary)}
+.tile .d{font-size:11px;color:var(--muted);margin-top:3px}
+.tile.ok .v{color:var(--good-ink)}
+/* ============================ meter ============================ */
+.meter{margin-top:2px}
+.meter .track{height:8px;border-radius:999px;background:var(--track);overflow:hidden}
+.meter .fill{height:100%;background:var(--fill);border-radius:999px}
+.meter .cap{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:6px}
+/* ============================ charts ============================ */
+.chart-card{display:flex;flex-direction:column}
+.chart-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:2px}
+.chart-head h3{font-size:14px}
+.chart-head .note{font-size:11px;color:var(--muted)}
+.chart-body{margin-top:12px}
+.chart-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--grid)}
+svg{display:block;overflow:visible}
+svg text{fill:var(--text-secondary)}
+.ax{stroke:var(--axis);stroke-width:1;shape-rendering:crispEdges}
+.gl{stroke:var(--grid);stroke-width:1;shape-rendering:crispEdges}
+.tick{font-size:10px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.lab{font-size:11.5px;fill:var(--text-secondary)}
+.val{font-size:11.5px;fill:var(--text-primary);font-variant-numeric:tabular-nums}
+.hit{fill:transparent;cursor:pointer}
+.dot-ring{stroke:var(--surface-1);stroke-width:2}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--text-secondary)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:baseline}
+.empty{font-size:12px;color:var(--muted);padding:22px 0;text-align:center}
+/* ============================ tables ============================ */
+.tbl-wrap{overflow-x:auto;margin-top:2px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--grid);vertical-align:top}
+th{font-size:11px;font-weight:500;color:var(--muted);white-space:nowrap;position:relative}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--text-primary)}
+th .arw{opacity:.5;font-size:9px;margin-left:3px}
+tbody tr:hover{background:var(--wash)}
+td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.zero td{color:var(--muted)}
+.hidden{display:none !important}
+/* ============================ bits ============================ */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--ring);color:var(--text-secondary);white-space:nowrap}
+.pill .dot{width:7px;height:7px;border-radius:50%;flex:none}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 8px;border-radius:5px;background:var(--wash);color:var(--text-secondary);white-space:nowrap}
+.badge.good{color:var(--good-ink)}
+.badge.crit{color:var(--critical)}
+.path{font-size:11px;color:var(--text-secondary);word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.copy{font:inherit;font-size:10px;background:transparent;border:1px solid var(--ring);border-radius:4px;color:var(--muted);padding:1px 5px;cursor:pointer;margin-left:6px}
+.copy:hover{color:var(--text-primary);background:var(--wash)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;color:var(--text-secondary);word-break:break-all}
+ul.lim{margin:0;padding-left:18px;font-size:12.5px;color:var(--text-secondary)}
+ul.lim li{margin:4px 0}
+.ladder{list-style:none;margin:14px 0 0;padding:0 0 0 20px;position:relative;font-size:12.5px}
+.ladder:before{content:"";position:absolute;left:4px;top:8px;bottom:10px;width:1px;background:var(--grid)}
+.ladder li{position:relative;padding-bottom:13px}
+.ladder li:last-child{padding-bottom:0}
+.ladder li:before{content:"";position:absolute;left:-20px;top:4px;width:9px;height:9px;border-radius:50%;
+  background:var(--surface-1);border:2px solid var(--axis);box-sizing:border-box}
+.ladder li.on:before{border-color:var(--fill);background:var(--fill)}
+.ladder b{font-size:15px;font-variant-numeric:tabular-nums;margin-right:2px}
+.ladder .d{display:block;font-size:11.5px;color:var(--muted);margin-top:1px}
+.dots{display:flex;gap:3px;align-items:center;flex-wrap:wrap}
+.dots i{width:8px;height:8px;border-radius:50%;display:block}
+.srow{cursor:pointer}
+.detail{background:var(--sunk)}
+.detail td{padding:14px 16px}
+/* ============================ tooltip ============================ */
+#tip{
+  position:fixed;z-index:80;pointer-events:none;opacity:0;transition:opacity .09s;
+  background:var(--surface-1);border:1px solid var(--ring);border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,.14);padding:9px 11px;font-size:12px;
+  color:var(--text-primary);max-width:340px;line-height:1.5;
+}
+#tip .t-h{font-weight:600;margin-bottom:3px;display:flex;align-items:center;gap:6px}
+#tip .t-r{color:var(--text-secondary);font-size:11.5px}
+#tip .dot{width:8px;height:8px;border-radius:50%;flex:none}
+/* ============================ drop / print ============================ */
+.drop{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;color:#fff;font-size:15px}
+.drop.on{display:flex}
+@media (max-width:920px){
+  .hero-row{grid-template-columns:1fr}
+  .two{grid-template-columns:1fr !important}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media print{
+  .filters,.top-actions{display:none}
+  .viz-root{--plane:#fff;--surface-1:#fff}
+  .card,.tiles,.metastrip{break-inside:avoid}
+}
+</style>
+</head>
+<body data-palette="#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4,#008300,#4a3aa7">
+<div class="viz-root">
+  <header class="top">
+    <div class="top-in">
+      <div>
+        <h1>Skill 使用证据报告 <span class="badge" id="kindBadge"></span></h1>
+        <div class="path" id="projPath"></div>
+      </div>
+      <div class="top-actions">
+        <button class="btn" id="importBtn" type="button">导入 JSON</button>
+        <input type="file" id="fileInput" accept=".json,application/json" class="hidden">
+        <button class="btn" id="themeBtn" type="button">深色</button>
+        <button class="btn" id="printBtn" type="button">打印 / PDF</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="metastrip" id="metastrip"></div>
+
+    <div class="filters" id="filters">
+      <div class="fgroup" id="fSkills"><span class="flabel">Skill</span></div>
+      <div class="fgroup" id="fSources"><span class="flabel">来源</span></div>
+      <div class="fgroup">
+        <button class="btn" id="fOnlyReads" type="button" aria-pressed="false">只看有读取的会话</button>
+        <button class="btn" id="fReset" type="button">重置</button>
+      </div>
+      <div class="spacer"></div>
+      <div class="flabel" id="fState"></div>
+    </div>
+
+    <section class="sec">
+      <div class="sec-head"><h2>结论</h2><span class="hint" id="kpiHint"></span></div>
+      <div class="hero-row">
+        <div class="card hero" id="hero"></div>
+        <div class="tiles" id="tiles"></div>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-head"><h2>采集范围与证据构成</h2><span class="hint">左：采集边界（报告口径）· 右：读取属性分布（随筛选变化）</span></div>
+      <div class="grid two" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+        <div class="card" id="c-coverage"></div>
+        <div class="card" id="c-attrs"></div>
+      </div>
+    </section>
+    <section class="sec">
+      <div class="sec-head"><h2>Skill 维度</h2><span class="hint">谁被读到、什么时候被读到</span></div>
+      <div class="grid two" style="grid-template-columns:minmax(0,0.8fr) minmax(0,1.2fr)">
+        <div class="card chart-card" id="c-skillbar"></div>
+        <div class="card chart-card" id="c-timeline"></div>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-head"><h2>会话</h2><span class="hint">每行一条会话轨迹，缩进表示子会话</span></div>
+      <div class="card" id="c-sessions"></div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-head"><h2>读取明细</h2><span class="hint">每次确认读取的时间、方式与原始定位</span></div>
+      <div class="card" id="c-reads"></div>
+    </section>
+
+    <details class="sec">
+      <summary>待核对与失败记录（不计入上方 Skill、次数或会话轨迹）</summary>
+      <p class="hint">以下是读取候选或失败尝试，不能据此认定该 Skill 已在项目中使用。仅跟随来源筛选。</p>
+      <div class="card" id="c-review"></div>
+    </details>
+    <section class="sec" id="analysis-section" hidden>
+      <div class="sec-head"><h2>AI 汇总分析</h2><span class="hint">基于统计与定向取证，不代表全会话效果审查</span></div>
+      <div class="card" id="c-analysis"></div>
+    </section>
+    <section class="sec">
+      <div class="sec-head"><h2>口径与限制</h2><span class="hint">来自报告正文，原样呈现</span></div>
+      <div class="card" id="c-limits"></div>
+    </section>
+  </div>
+</div>
+
+<div id="tip" role="status" aria-live="polite"></div>
+<div class="drop" id="drop">松开以载入 report.json</div>
+
+<script id="report-data" type="application/json">__SKILL_AUDIT_DATA__</script>
+<script>
+"use strict";
+/* ============================================================
+   数据装载
+   ============================================================ */
+var RAW = null;
+try { RAW = JSON.parse(document.getElementById('report-data').textContent); }
+catch (e) { RAW = null; }
+
+var SKILL_SLOTS = ['--s1','--s2','--s3','--s4','--s5','--s6','--s7','--s8'];
+var SOURCE_SLOTS = { claude:'--s5', codex:'--s6', comate:'--s7' };
+var SOURCE_FALLBACK = ['--s8','--s7','--s6','--s5'];
+
+var D = null;      // 规范化后的数据
+var S = null;      // 交互状态
+var TIP = document.getElementById('tip');
+/* ============================================================
+   小工具
+   ============================================================ */
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function el(tag, attrs, parent){
+  var n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (var k in attrs) if (attrs[k] !== null && attrs[k] !== undefined) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function baseName(p){
+  if (!p) return '(未知)';
+  var parts = String(p).split('/').filter(Boolean);
+  if (!parts.length) return String(p);
+  var last = parts[parts.length-1];
+  if (/\.(md|MD)$/.test(last) && parts.length > 1) return parts[parts.length-2];
+  return last;
+}
+function skillStateLabel(path){
+  var state = D.extraction.current_skill_states && D.extraction.current_skill_states[path];
+  return !state || state.status === 'present' ? '' : state.status === 'missing' ? '当前不存在' : '状态未知';
+}
+function skillMissing(path){
+  return D.extraction.current_skill_states?.[path]?.status === 'missing';
+}
+function skillNameHTML(path, name){
+  if (!skillMissing(path)) return esc(name);
+  var state = D.extraction.current_skill_states[path];
+  return '<del title="' + esc('当前不存在 · 检查时间：' + state.checked_at) + '">' + esc(name) + '</del>';
+}
+function skillStateBadge(path){
+  var label = skillStateLabel(path);
+  if (!label || skillMissing(path)) return '';
+  var state = D.extraction.current_skill_states[path];
+  return ' <span class="badge" title="' + esc('检查时间：' + state.checked_at + ' · ' + (state.reason || '')) + '">' + esc(label) + '</span>';
+}
+function svgStateBadge(svg, right, top, label){
+  if (!label) return;
+  var width = label.length * 10 + 14;
+  el('rect', {x:right-width, y:top, width:width, height:17, rx:4, fill:'#fff0d2'}, svg);
+  var text = el('text', {x:right-width/2, y:top+12, 'text-anchor':'middle', style:'font-size:10px;fill:#805500'}, svg);
+  text.textContent = label;
+}
+function shortId(id){
+  if (!id) return '';
+  var s = String(id);
+  var sub = s.indexOf(':subagent:');
+  if (sub > -1) return s.slice(0,8) + '…/子代理';
+  return s.length > 12 ? s.slice(0,8) + '…' : s;
+}
+/* 把 ISO 时间统一解析为毫秒；6 位小数秒截到 3 位以兼容解析 */
+function ts(v){
+  if (!v) return NaN;
+  var s = String(v).replace(/\.(\d{3})\d+/, '.$1');
+  var t = Date.parse(s);
+  return isNaN(t) ? NaN : t;
+}
+/* 北京时间（UTC+8）格式化：先平移再用 UTC getter，结果与阅读者本地时区无关 */
+var BJ = 8 * 3600 * 1000;
+function bj(t){ return new Date(t + BJ); }
+function p2(n){ return n < 10 ? '0' + n : '' + n; }
+function fmtDay(t){ var d = bj(t); return p2(d.getUTCMonth()+1) + '-' + p2(d.getUTCDate()); }
+function fmtMin(t){ var d = bj(t); return fmtDay(t) + ' ' + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()); }
+function fmtFull(t){ var d = bj(t); return d.getUTCFullYear() + '-' + fmtMin(t); }
+function dayFloor(t){ var d = bj(t); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - BJ; }
+function pct(a,b){ return b ? Math.round(a / b * 1000) / 10 : 0; }
+function midElide(s, head, tail){
+  s = String(s||''); head = head||26; tail = tail||30;
+  return s.length <= head + tail + 1 ? s : s.slice(0, head) + '…' + s.slice(-tail);
+}
+/* ============================================================
+   规范化
+   ============================================================ */
+function normalize(raw){
+  var ex = raw.extraction || {};
+  var scope = raw.scope || {};
+  var cov = raw.coverage || {};
+  var reads = (ex.reads || []).map(function(r, i){
+    var o = {};
+    for (var k in r) o[k] = r[k];
+    o._i = i;
+    o._t = ts(r.time_beijing || r.timestamp);
+    o._name = r.name || baseName(r.skill);
+    return o;
+  });
+
+  var reviewReads = reads.filter(function(r){ return r.status !== 'confirmed'; });
+  reads = reads.filter(function(r){ return r.status === 'confirmed'; });
+  /* 主视图只统计确认读取；失败和未确认在独立复核区保留。 */
+  var idx = {}, order = [];
+  reads.forEach(function(r){
+    if (!idx[r.skill]) { idx[r.skill] = { path:r.skill, name:r._name, declared:0, reads:0, sessions:{} }; order.push(r.skill); }
+    idx[r.skill].name = r._name;
+    idx[r.skill].reads++;
+    idx[r.skill].sessions[r.source + ':' + r.session_id] = 1;
+  });
+  var skills = order.map(function(k){ return idx[k]; });
+  /* 槽位按名称字母序固定分配：与读取次数排名无关，筛选不会改色 */
+  skills.slice().sort(function(a,b){ return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; })
+    .forEach(function(s, i){ s.slot = SKILL_SLOTS[i % SKILL_SLOTS.length]; });
+  skills.sort(function(a,b){
+    return (b.reads - a.reads) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  });
+  skills.forEach(function(s){ s.sessionCount = Object.keys(s.sessions).length; });
+
+  /* 来源 */
+  var srcSet = {};
+  (scope.sources || []).forEach(function(x){ srcSet[x] = 1; });
+  (cov.sources || []).forEach(function(x){ srcSet[x.source] = 1; });
+  (raw.sessions || []).forEach(function(x){ srcSet[x.source] = 1; });
+  var sources = Object.keys(srcSet).sort();
+  var srcMeta = {};
+  sources.forEach(function(name, i){
+    var c = (cov.sources || []).filter(function(x){ return x.source === name; })[0] || {};
+    srcMeta[name] = {
+      name: name, status: c.status || '(未报告)', files: (c.files == null ? null : c.files),
+      slot: SOURCE_SLOTS[name] || SOURCE_FALLBACK[i % SOURCE_FALLBACK.length],
+      sessions: 0, reads: 0
+    };
+  });
+  /* 会话 */
+  var sessions = (raw.sessions || []).map(function(s){
+    var o = {};
+    for (var k in s) o[k] = s[k];
+    o._key = s.key || (s.source + ':' + s.session_id);
+    o._t = ts(s.last_active);
+    o._reads = [];
+    o._cand = (s.candidates || []).length;
+    o._prob = (s.problems || []).length;
+    o._events = (s.events || []).length;
+    o._kids = [];
+    return o;
+  });
+  var byKey = {};
+  sessions.forEach(function(s){ byKey[s.source + ':' + s.session_id] = s; });
+  reads.forEach(function(r){
+    var host = byKey[r.source + ':' + r.session_id];
+    if (host) { host._reads.push(r); r._session = host; }
+    if (srcMeta[r.source]) srcMeta[r.source].reads++;
+  });
+  sessions.forEach(function(s){
+    if (srcMeta[s.source]) srcMeta[s.source].sessions++;
+    s._reads.sort(function(a,b){ return a._t - b._t; });
+  });
+  /* 父子关系 → 缩进树，根按最近活跃倒序 */
+  var roots = [];
+  sessions.forEach(function(s){
+    var p = s.parent_session ? byKey[s.source + ':' + s.parent_session] : null;
+    if (p && p !== s) { s._parent = p; p._kids.push(s); } else roots.push(s);
+  });
+  function byRecent(a,b){ return (b._t||0) - (a._t||0); }
+  var ordered = [];
+  (function walk(list, depth){
+    list.sort(byRecent).forEach(function(s){
+      s._depth = depth; ordered.push(s); walk(s._kids, depth+1);
+    });
+  })(roots, 0);
+
+  /* 全局时间域：所有读取 + 会话活跃时间，筛选时不重新缩放 */
+  var times = reads.map(function(r){ return r._t; })
+    .concat(sessions.map(function(s){ return s._t; }))
+    .filter(function(t){ return !isNaN(t); });
+  var t0 = times.length ? Math.min.apply(null, times) : Date.now();
+  var t1 = times.length ? Math.max.apply(null, times) : Date.now();
+  if (t1 - t0 < 36e5) { t0 -= 18e5; t1 += 18e5; }
+
+  return {
+    raw: raw, scope: scope, coverage: cov, extraction: ex, period: raw.period || {},
+    reads: reads, reviewReads: reviewReads, skills: skills, sources: sources, srcMeta: srcMeta,
+    sessions: ordered, t0: t0, t1: t1,
+    slotOf: function(path){ return (idx[path] && idx[path].slot) || '--s1'; },
+    nameOf: function(path){ return (idx[path] && idx[path].name) || baseName(path); }
+  };
+}
+/* ============================================================
+   悬浮层（键盘 focus 与鼠标 hover 等价）
+   ============================================================ */
+function showTip(html, x, y){
+  TIP.innerHTML = html;
+  TIP.style.opacity = '1';
+  moveTip(x, y);
+}
+function moveTip(x, y){
+  var r = TIP.getBoundingClientRect();
+  var left = x + 14, top = y + 14;
+  if (left + r.width > window.innerWidth - 8) left = x - r.width - 14;
+  if (top + r.height > window.innerHeight - 8) top = y - r.height - 14;
+  TIP.style.left = Math.max(8, left) + 'px';
+  TIP.style.top = Math.max(8, top) + 'px';
+}
+function hideTip(){ TIP.style.opacity = '0'; }
+function bindTip(node, html){
+  node.addEventListener('mouseenter', function(e){ showTip(html, e.clientX, e.clientY); });
+  node.addEventListener('mousemove', function(e){ moveTip(e.clientX, e.clientY); });
+  node.addEventListener('mouseleave', hideTip);
+  node.addEventListener('focus', function(){
+    var b = node.getBoundingClientRect();
+    showTip(html, b.left + b.width/2, b.top + b.height/2);
+  });
+  node.addEventListener('blur', hideTip);
+  if (!node.hasAttribute('tabindex')) node.setAttribute('tabindex','0');
+}
+function swatch(slot){ return '<span class="dot" style="background:var(' + slot + ')"></span>'; }
+
+/* ============================================================
+   筛选状态
+   ============================================================ */
+function initState(){
+  S = { skills:{}, sources:{}, onlyReads:false };
+  D.skills.forEach(function(s){ S.skills[s.path] = true; });
+  D.sources.forEach(function(n){ S.sources[n] = true; });
+}
+function activeReads(){
+  return D.reads.filter(function(r){ return S.skills[r.skill] !== false && S.sources[r.source] !== false; });
+}
+function activeSessions(){
+  var keep = D.sessions.filter(function(s){ return S.sources[s.source] !== false; });
+  if (!S.onlyReads) return keep;
+  return keep.filter(function(s){ return sessionReads(s).length > 0; });
+}
+function sessionReads(s){
+  return s._reads.filter(function(r){ return S.skills[r.skill] !== false; });
+}
+function filterOn(){
+  var off = 0;
+  D.skills.forEach(function(s){ if (S.skills[s.path] === false) off++; });
+  D.sources.forEach(function(n){ if (S.sources[n] === false) off++; });
+  return off > 0 || S.onlyReads;
+}
+/* ============================================================
+   外壳：标题 / 元信息 / 筛选行
+   ============================================================ */
+function renderShell(){
+  var sc = D.scope, p = D.period, ex = D.extraction;
+  $('kindBadge').textContent = (D.raw.kind || 'report') + ' · v' + (D.raw.schema_version || '?');
+  $('projPath').innerHTML = '<span class="mono">' + esc(sc.project || '(未指定工程)') + '</span>';
+
+  var fromTxt = (ts(p.from) <= 0 || !p.from) ? '全量历史' : fmtFull(ts(p.from));
+  var rows = [
+    ['采集区间', fromTxt + ' → ' + (p.to_exclusive ? fmtFull(ts(p.to_exclusive)) : '—')],
+    ['时区', esc(p.timezone || '—') + '（页面统一按北京时间显示）'],
+    ['选取策略', esc(sc.selection || '—') + ' · 上限 ' + (sc.limit == null ? '不限' : sc.limit) + ' 会话 · 天数 ' + (sc.days == null ? '不限' : sc.days)],
+    ['Skill 根目录', (sc.skills_roots || []).map(function(r){ return '<span class="mono">' + esc(r) + '</span>'; }).join('<br>') || '—'],
+    ['当前路径检查', esc(Object.values(ex.current_skill_states || {})[0]?.checked_at || '本报告未检查') + ' · 删除线表示检查时原路径不存在，历史次数保留'],
+    ['提取方法', '<span class="mono">' + esc(ex.method || '—') + '</span> · ' + esc(ex.status || '—')]
+  ];
+  $('metastrip').innerHTML = rows.map(function(r){
+    return '<div class="m"><div class="k">' + r[0] + '</div><div class="v">' + r[1] + '</div></div>';
+  }).join('');
+
+  var fs = $('fSkills');
+  fs.innerHTML = '<span class="flabel">Skill</span>';
+  D.skills.forEach(function(s){
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip';
+    b.setAttribute('aria-pressed', S.skills[s.path] !== false);
+    b.innerHTML = swatch(s.slot) + skillNameHTML(s.path, s.name) + skillStateBadge(s.path) + ' <span class="n">' + s.reads + '</span>';
+    b.onclick = function(){
+      S.skills[s.path] = (S.skills[s.path] === false);
+      b.setAttribute('aria-pressed', S.skills[s.path] !== false);
+      renderAll();
+    };
+    fs.appendChild(b);
+  });
+  var fo = $('fSources');
+  fo.innerHTML = '<span class="flabel">来源</span>';
+  D.sources.forEach(function(n){
+    var m = D.srcMeta[n];
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip';
+    b.setAttribute('aria-pressed', S.sources[n] !== false);
+    b.innerHTML = swatch(m.slot) + esc(n) + ' <span class="n">' + m.sessions + '</span>';
+    b.onclick = function(){
+      S.sources[n] = (S.sources[n] === false);
+      b.setAttribute('aria-pressed', S.sources[n] !== false);
+      renderAll();
+    };
+    fo.appendChild(b);
+  });
+  $('fOnlyReads').onclick = function(){
+    S.onlyReads = !S.onlyReads;
+    this.setAttribute('aria-pressed', S.onlyReads);
+    renderAll();
+  };
+  $('fReset').onclick = function(){
+    initState(); renderShell(); renderAll();
+  };
+  $('fOnlyReads').setAttribute('aria-pressed', S.onlyReads);
+}
+/* ============================================================
+   结论：主数字 + 指标砖
+   ============================================================ */
+var STATIC_MARK = '<span class="muted" title="报告口径，不随筛选变化">※</span>';
+
+function renderKPI(){
+  var reads = activeReads(), sess = activeSessions(), sum = D.extraction.summary || {};
+  var skillsHit = {}, sessHit = {};
+  reads.forEach(function(r){ skillsHit[r.skill] = 1; sessHit[r.source + ':' + r.session_id] = 1; });
+  var nSkills = Object.keys(skillsHit).length, nSess = Object.keys(sessHit).length;
+
+  var top = null;
+  sess.forEach(function(s){
+    var n = sessionReads(s).length;
+    if (n && (!top || n > top.n)) top = { s:s, n:n };
+  });
+
+  $('kpiHint').innerHTML = filterOn()
+    ? '已筛选 · ' + reads.length + ' / ' + D.reads.length + ' 次读取在当前视图内'
+    : '全量视图 · ※ 标记的指标始终为报告口径';
+
+  $('hero').innerHTML =
+    '<div class="lab">确认读取次数' + (filterOn() ? '（当前筛选）' : '') + '</div>' +
+    '<div class="fig">' + reads.length + '<small>次</small></div>' +
+    '<div class="say">覆盖 <b>' + nSkills + '</b> 个 Skill，来自 <b>' + nSess + '</b> 个会话' +
+    (top ? '；其中 <span class="mono">' + esc(shortId(top.s.session_id)) + '</span> 一个会话占 <b>' +
+      top.n + '</b> 次（' + pct(top.n, reads.length) + '%）' : '') + '</div>' +
+    '<div class="say muted">口径：读取或注入 SKILL.md 即计一次调用；失败 ' +
+    (sum.failed_reads || 0) + ' 次、未确认 ' + (sum.unconfirmed_reads || 0) + ' 次。</div>';
+
+  var tiles = [
+    { k:'覆盖 Skill', v:nSkills, em:' / ' + D.skills.length, d:'有确认读取的 Skill 数' },
+    { k:'有读取的会话', v:nSess, em:' / ' + sess.length, d:'其余会话未读到任何 Skill' },
+    { k:'范围内会话', v:sess.length, em:' / ' + ((D.coverage.sessions_discovered != null) ? D.coverage.sessions_discovered : '?'),
+      d:'发现 ' + (D.coverage.sessions_discovered || 0) + ' 个，范围外 ' + (D.coverage.sessions_outside_limit || 0) + ' 个', mark:1 },
+    { k:'失败读取', v:(sum.failed_reads || 0), d:'解析失败的读取请求', ok:(sum.failed_reads || 0) === 0, mark:1 },
+    { k:'未确认读取', v:(sum.unconfirmed_reads || 0), d:'缺少标识、未计入统计', ok:(sum.unconfirmed_reads || 0) === 0, mark:1 },
+    { k:'排除读取', v:(D.extraction.excluded_reads || 0), d:'不在 Skill 根目录约束内', mark:1 }
+  ];
+  $('tiles').innerHTML = tiles.map(function(t){
+    return '<div class="tile' + (t.ok ? ' ok' : '') + '">' +
+      '<div class="k">' + esc(t.k) + (t.mark ? ' ' + STATIC_MARK : '') + '</div>' +
+      '<div class="v">' + t.v + (t.em ? '<em>' + t.em + '</em>' : '') + '</div>' +
+      '<div class="d">' + esc(t.d) + '</div></div>';
+  }).join('');
+}
+/* ============================================================
+   通用图元
+   ============================================================ */
+function barPath(x, y, w, h, r){
+  r = Math.min(r, Math.max(0, w), h/2);
+  if (w <= 0.6) return 'M' + x + ',' + y + 'h0.6v' + h + 'h-0.6Z';
+  return 'M' + x + ',' + y + 'H' + (x+w-r) + 'a' + r + ',' + r + ' 0 0 1 ' + r + ',' + r +
+         'V' + (y+h-r) + 'a' + r + ',' + r + ' 0 0 1 ' + (-r) + ',' + r + 'H' + x + 'Z';
+}
+function niceScale(max, count){
+  count = count || 5;
+  if (!(max > 0)) return { max:1, ticks:[0,1], step:1 };
+  var raw = max / count;
+  var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+  var norm = raw / mag;
+  var step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  var top = Math.ceil(max / step) * step;
+  var ticks = [];
+  for (var v = 0; v <= top + step/1000; v += step) ticks.push(Math.round(v*1e6)/1e6);
+  return { max:top, ticks:ticks, step:step };
+}
+/* 单系列横向条：标签在左，值在条尾，4px 圆角数据端 */
+function hbars(host, rows, opts){
+  opts = opts || {};
+  host.innerHTML = '';
+  if (!rows.length){ host.innerHTML = '<div class="empty">当前筛选下没有数据</div>'; return; }
+  var W = Math.max(320, host.clientWidth || 460);
+  var labelW = opts.labelW || 150, valW = opts.valW || 52;
+  var rowH = opts.rowH || 30, barH = Math.min(24, opts.barH || 15);
+  var plotW = Math.max(60, W - labelW - valW);
+  var axisH = 20;
+  var H = rows.length * rowH + axisH;
+  var sc = niceScale(Math.max.apply(null, rows.map(function(r){ return r.value; })), 5);
+  var svg = el('svg', { width:W, height:H, viewBox:'0 0 ' + W + ' ' + H });
+  sc.ticks.forEach(function(t){
+    var x = labelW + t / sc.max * plotW;
+    el('line', { x1:x, y1:0, x2:x, y2:rows.length*rowH, 'class':'gl' }, svg);
+    var tx = el('text', { x:x, y:rows.length*rowH + 13, 'class':'tick', 'text-anchor':'middle' }, svg);
+    tx.textContent = t;
+  });
+  rows.forEach(function(r, i){
+    var y = i * rowH + (rowH - barH)/2;
+    var w = r.value / sc.max * plotW;
+    var lb = el('text', { x:labelW - 12, y:y + barH/2 + (r.stateLabel ? -3 : 4), 'class':'lab', 'text-anchor':'end' }, svg);
+    lb.textContent = r.label;
+    if (r.missing) lb.setAttribute('text-decoration','line-through');
+    svgStateBadge(svg, labelW-12, y+barH/2+2, r.stateLabel);
+    el('path', { d:barPath(labelW, y, w, barH, 4), style:'fill:var(' + (r.slot || '--s1') + ')' }, svg);
+    var vt = el('text', { x:labelW + w + 8, y:y + barH/2 + 4, 'class':'val' }, svg);
+    vt.textContent = r.value + (opts.unit || '');
+    var hit = el('rect', { x:labelW - 4, y:i*rowH, width:plotW + valW, height:rowH, 'class':'hit' }, svg);
+    bindTip(hit, r.tip || ('<div class="t-h">' + swatch(r.slot || '--s1') + esc(r.label) +
+      '</div><div class="t-r">' + r.value + (opts.unit || '') + '</div>'));
+  });
+  host.appendChild(svg);
+}
+/* 解析 CSS 变量为 rgb，用于段内文字择色 */
+var _probe = null;
+function resolveVar(v){
+  if (!_probe){ _probe = document.createElement('span'); _probe.style.display='none';
+    document.querySelector('.viz-root').appendChild(_probe); }
+  _probe.style.color = 'var(' + v + ')';
+  return getComputedStyle(_probe).color;
+}
+function lum(rgb){
+  var m = /(\d+)[,\s]+(\d+)[,\s]+(\d+)/.exec(rgb || '');
+  if (!m) return 0;
+  var a = [m[1], m[2], m[3]].map(function(x){ x = x/255; return x <= 0.03928 ? x/12.92 : Math.pow((x+0.055)/1.055, 2.4); });
+  return 0.2126*a[0] + 0.7152*a[1] + 0.0722*a[2];
+}
+function inkOn(slot){ return lum(resolveVar(slot)) > 0.42 ? '#0b0b0b' : '#ffffff'; }
+
+/* 整体占比条：2px 表面间隙分隔，外端 4px 圆角，段内标签只在放得下时出现 */
+function stackbar(host, rows){
+  host.innerHTML = '';
+  var total = rows.reduce(function(a,r){ return a + r.value; }, 0);
+  if (!total){ host.innerHTML = '<div class="empty">当前筛选下没有数据</div>'; return; }
+  var W = Math.max(240, host.clientWidth || 420), h = 24, gap = 2;
+  var svg = el('svg', { width:W, height:h, viewBox:'0 0 ' + W + ' ' + h });
+  var cid = 'clip' + Math.random().toString(36).slice(2);
+  var cp = el('clipPath', { id:cid }, svg);
+  el('rect', { x:0, y:0, width:W, height:h, rx:4 }, cp);
+  var g = el('g', { 'clip-path':'url(#' + cid + ')' }, svg);
+  var x = 0;
+  rows.forEach(function(r, i){
+    var w = r.value / total * W;
+    var draw = Math.max(1, w - (i === rows.length-1 ? 0 : gap));
+    el('rect', { x:x, y:0, width:draw, height:h, style:'fill:var(' + r.slot + ')' }, g);
+    var text = r.label + ' ' + r.value;
+    if (draw > text.length * 7 + 16){
+      var t = el('text', { x:x + 8, y:h/2 + 4, 'class':'val', style:'fill:' + inkOn(r.slot) }, g);
+      t.textContent = text;
+    }
+    var hit = el('rect', { x:x, y:0, width:w, height:h, 'class':'hit' }, svg);
+    bindTip(hit, '<div class="t-h">' + swatch(r.slot) + esc(r.label) + '</div><div class="t-r">' +
+      r.value + ' · 占 ' + pct(r.value, total) + '%</div>');
+    x += w;
+  });
+  host.appendChild(svg);
+}
+/* 图表的表格孪生视图（可访问性兜底） */
+function tableToggle(foot, headers, rows, label){
+  var btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'btn'; btn.textContent = label || '表格视图';
+  btn.setAttribute('aria-pressed','false');
+  var box = document.createElement('div');
+  box.className = 'tbl-wrap hidden';
+  box.innerHTML = '<table><thead><tr>' + headers.map(function(h){ return '<th>' + esc(h) + '</th>'; }).join('') +
+    '</tr></thead><tbody>' + rows.map(function(r){
+      return '<tr>' + r.map(function(c, i){ return '<td' + (i ? ' class="n"' : '') + '>' + c + '</td>'; }).join('') + '</tr>';
+    }).join('') + '</tbody></table>';
+  btn.onclick = function(){
+    var on = box.classList.toggle('hidden');
+    btn.setAttribute('aria-pressed', String(!on));
+  };
+  foot.appendChild(btn);
+  foot.parentNode.appendChild(box);
+}
+/* ============================================================
+   采集范围与覆盖
+   ============================================================ */
+function renderCoverage(){
+  var cov = D.coverage, inScope = D.sessions.length;
+  var found = cov.sessions_discovered == null ? inScope : cov.sessions_discovered;
+  var out = cov.sessions_outside_limit == null ? Math.max(0, found - inScope) : cov.sessions_outside_limit;
+  var host = $('c-coverage');
+  var fileTotal = 0, fileParts = [];
+  D.sources.forEach(function(n){
+    var m = D.srcMeta[n];
+    if (m.files != null){ fileTotal += m.files; fileParts.push(n + ' ' + m.files); }
+  });
+  host.innerHTML =
+    '<div class="chart-head"><h3>采集口径</h3><span class="note">※ 报告口径，不随筛选变化</span></div>' +
+    '<ol class="ladder">' +
+      '<li><b>' + fileTotal + '</b>个转写文件被扫描' +
+        '<span class="d">扫描面 = 三个来源历史目录下的全部会话文件（' + esc(fileParts.join(' · ')) + '）；不受会话上限约束</span></li>' +
+      '<li><b>' + found + '</b>个会话被发现' +
+        '<span class="d">根据历史记录中的工作目录筛选会话（项目范围：' + esc(D.scope.project || '全部项目') + '），并合并同一会话的多个历史文件。子 Agent 会话可能单独计数，因此扫描文件数与会话数不一定相同。</span></li>' +
+      '<li class="on"><b>' + inScope + '</b>个会话进入本报告' +
+        '<span class="d">按 ' + esc(D.scope.selection || '—') + ' 取最近 ' + (D.scope.limit == null ? '不限' : D.scope.limit) +
+        ' 个；其余 ' + out + ' 个在范围外，未参与统计</span></li>' +
+    '</ol>' +
+    '<div class="meter" style="margin-top:16px">' +
+      '<div class="track"><div class="fill" style="width:' + Math.max(0.6, pct(inScope, found)) + '%"></div></div>' +
+      '<div class="cap"><span>进入报告 <b class="num">' + inScope + '</b> 个会话（' + pct(inScope, found) + '%）</span>' +
+      '<span>范围外 <b class="num">' + out + '</b> / 共发现 ' + found + '</span></div>' +
+    '</div>' +
+    '<div style="margin-top:20px"><div class="chart-head"><h3 style="font-size:12.5px;font-weight:500;color:var(--text-secondary)">范围内 ' + inScope + ' 个会话的来源构成</h3></div>' +
+      '<div id="cov-stack" style="margin-top:8px"></div><div class="legend" id="cov-legend" style="margin-top:9px"></div></div>' +
+    '<div style="margin-top:20px"><div class="chart-head"><h3 style="font-size:12.5px;font-weight:500;color:var(--text-secondary)">各来源扫描到的文件数</h3>' +
+      '<span class="note">扫描面 · 非会话数</span></div>' +
+      '<div id="cov-files" style="margin-top:8px"></div></div>' +
+    '<div class="chart-foot" id="cov-foot"></div>';
+
+  var rows = D.sources.map(function(n){
+    var m = D.srcMeta[n];
+    return { label:n, value:m.sessions, slot:m.slot };
+  }).filter(function(r){ return r.value > 0; });
+  stackbar($('cov-stack'), rows);
+  $('cov-legend').innerHTML = D.sources.map(function(n){
+    var m = D.srcMeta[n];
+    return '<span><i style="background:var(' + m.slot + ')"></i>' + esc(n) + ' ' +
+      '<span class="num muted">' + m.sessions + ' 会话 · ' + m.reads + ' 次读取</span></span>';
+  }).join('');
+
+  var fileRows = D.sources.filter(function(n){ return D.srcMeta[n].files != null; }).map(function(n){
+    var m = D.srcMeta[n];
+    return { label:n, value:m.files, slot:m.slot,
+      tip:'<div class="t-h">' + swatch(m.slot) + esc(n) + '</div><div class="t-r">扫描到 ' + m.files +
+          ' 个转写文件 · 状态 ' + esc(m.status) + '<br>这是扫描面，不是会话数，也不受上限 ' +
+          (D.scope.limit == null ? '不限' : D.scope.limit) + ' 约束</div>' };
+  });
+  hbars($('cov-files'), fileRows, { labelW:78, valW:56, rowH:26, barH:13, unit:' 个' });
+
+  var foot = $('cov-foot');
+  foot.innerHTML = D.sources.map(function(n){
+    var m = D.srcMeta[n], ok = /avail|ok|complete/i.test(m.status);
+    return '<span class="badge ' + (ok ? 'good' : '') + '">' + esc(n) + ' · ' + esc(m.status) + '</span>';
+  }).join('') +
+  '<span class="badge">未覆盖来源 ' + ((cov.uncovered || []).length ? esc((cov.uncovered || []).join('、')) : '无') + '</span>' +
+  '<span class="badge">排除会话 ' + ((D.scope.excluded_sessions || []).length || '无') + '</span>' +
+  (fileTotal ? '<span class="muted" style="font-size:11px;flex-basis:100%">扫描面合计 ' + fileTotal +
+    ' 个历史文件，用于核对采集是否漏源；本报告的统计口径始终是上面那 ' + inScope + ' 个会话。</span>' : '');
+  tableToggle(foot, ['来源','扫描文件','范围内会话','读取数','状态'], D.sources.map(function(n){
+    var m = D.srcMeta[n];
+    return [esc(n), (m.files == null ? '—' : m.files), m.sessions, m.reads, esc(m.status)];
+  }));
+}
+/* ============================================================
+   证据构成（读取属性分布）
+   ============================================================ */
+function miniBar(p){
+  return '<span style="display:inline-block;width:52px;height:6px;border-radius:3px;background:var(--wash);' +
+    'vertical-align:middle;margin-right:8px"><span style="display:block;height:100%;border-radius:3px;' +
+    'background:var(--axis);width:' + Math.max(2, p) + '%"></span></span>';
+}
+function renderAttrs(){
+  var reads = activeReads(), ex = D.extraction;
+  var dims = [['作用域','scope'], ['读取方式','read_method'], ['时间基准','time_basis'], ['确认状态','status']];
+  var body = '';
+  dims.forEach(function(d){
+    var c = {}, keys = [];
+    reads.forEach(function(r){
+      var v = r[d[1]] == null ? '(未标注)' : String(r[d[1]]);
+      if (c[v] === undefined){ c[v] = 0; keys.push(v); }
+      c[v]++;
+    });
+    keys.sort(function(a,b){ return c[b] - c[a]; });
+    if (!keys.length){ body += '<tr class="zero"><td>' + d[0] + '</td><td>—</td><td class="n">0</td><td class="n">—</td></tr>'; return; }
+    keys.forEach(function(v, i){
+      var p = pct(c[v], reads.length);
+      body += '<tr><td>' + (i ? '' : esc(d[0])) + '</td><td class="mono">' + esc(v) +
+        (keys.length === 1 ? ' <span class="muted">（全部）</span>' : '') + '</td>' +
+        '<td class="n">' + c[v] + '</td><td class="n">' + miniBar(p) + p + '%</td></tr>';
+    });
+  });
+  $('c-attrs').innerHTML =
+    '<div class="chart-head"><h3>证据构成</h3><span class="note">随筛选变化 · 共 ' + reads.length + ' 次读取</span></div>' +
+    '<div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>维度</th><th>取值</th><th>次数</th><th>占比</th></tr></thead>' +
+    '<tbody>' + body + '</tbody></table></div>' +
+    '<div class="chart-foot" style="flex-wrap:wrap;gap:8px">' +
+      '<span class="badge">' + STATIC_MARK + ' 排除读取 ' + (ex.excluded_reads || 0) + '</span>' +
+      '<span class="badge">' + STATIC_MARK + ' 未解析范围 ' + ((ex.unresolved_scope_reads || []).length) + '</span>' +
+      '<span class="badge">' + STATIC_MARK + ' 未覆盖 ' + ((ex.uncovered || []).length ? esc((ex.uncovered || []).join('、')) : '无') + '</span>' +
+      '<span class="badge">' + STATIC_MARK + ' 提取状态 ' + esc(ex.status || '—') + '</span>' +
+    '</div>';
+}
+/* ============================================================
+   Skill 读取次数
+   ============================================================ */
+function renderSkillBar(){
+  var reads = activeReads();
+  var cnt = {}, sess = {}, span = {};
+  reads.forEach(function(r){
+    cnt[r.skill] = (cnt[r.skill] || 0) + 1;
+    (sess[r.skill] = sess[r.skill] || {})[r.source + ':' + r.session_id] = 1;
+    var s = span[r.skill] = span[r.skill] || { a:r._t, b:r._t };
+    if (r._t < s.a) s.a = r._t;
+    if (r._t > s.b) s.b = r._t;
+  });
+  var list = D.skills.filter(function(s){ return S.skills[s.path] !== false; });
+  var rows = list.map(function(s){
+    var n = cnt[s.path] || 0, ns = Object.keys(sess[s.path] || {}).length;
+    return { label:s.name, value:n, slot:s.slot, stateLabel:skillMissing(s.path) ? '' : skillStateLabel(s.path), missing:skillMissing(s.path),
+      tip:'<div class="t-h">' + swatch(s.slot) + skillNameHTML(s.path, s.name) + skillStateBadge(s.path) + '</div>' +
+          '<div class="t-r">' + n + ' 次读取 · ' + ns + ' 个会话' +
+          (span[s.path] ? '<br>' + fmtMin(span[s.path].a) + ' → ' + fmtMin(span[s.path].b) : '') +
+          '<br><span class="mono">' + esc(midElide(s.path, 18, 34)) + '</span></div>' };
+  }).sort(function(a,b){ return b.value - a.value; });
+
+  var host = $('c-skillbar');
+  host.innerHTML =
+    '<div class="chart-head"><h3>每个 Skill 的读取次数</h3><span class="note">色板同顶部筛选行</span></div>' +
+    '<div class="chart-body" id="sb-body"></div><div class="chart-foot" id="sb-foot"></div>';
+  hbars($('sb-body'), rows, { labelW:148, valW:54, rowH:32, barH:15, unit:' 次' });
+  tableToggle($('sb-foot'), ['Skill','读取次数','会话数','路径'], rows.map(function(r){
+    var s = list.filter(function(x){ return x.name === r.label; })[0] || {};
+    return [skillNameHTML(s.path, r.label) + skillStateBadge(s.path), r.value, Object.keys(sess[s.path] || {}).length,
+      '<span class="path">' + esc(s.path || '') + '</span>'];
+  }));
+}
+/* ============================================================
+   调用轨迹（时间 × Skill 泳道）
+   ============================================================ */
+function readDomain(){
+  var t = D.reads.map(function(r){ return r._t; }).filter(function(x){ return !isNaN(x); });
+  if (!t.length) return [D.t0, D.t1];
+  var a = Math.min.apply(null, t), b = Math.max.apply(null, t);
+  if (b - a < 6 * 36e5){ a -= 12 * 36e5; b += 12 * 36e5; }
+  else { var pad = (b - a) * 0.04; a -= pad; b += pad; }
+  return [a, b];
+}
+function dayTicks(a, b, maxN){
+  var out = [], d = dayFloor(a);
+  if (d < a) d += 864e5;
+  while (d <= b){ out.push(d); d += 864e5; }
+  if (out.length > maxN){
+    var step = Math.ceil(out.length / maxN);
+    out = out.filter(function(_, i){ return i % step === 0; });
+  }
+  return out;
+}
+function renderTimeline(){
+  var host = $('c-timeline');
+  host.innerHTML =
+    '<div class="chart-head"><h3>调用轨迹</h3><span class="note">横轴为北京时间，一行一个 Skill · 名称删除线表示当前不存在</span></div>' +
+    '<div class="chart-body" id="tl-body"></div><div class="chart-foot" id="tl-foot"></div>';
+  var body = $('tl-body');
+  var lanes = D.skills.filter(function(s){ return S.skills[s.path] !== false; })
+    .slice().sort(function(a,b){ return a.name < b.name ? -1 : 1; });
+  var reads = activeReads();
+  if (!lanes.length || !reads.length){
+    body.innerHTML = '<div class="empty">当前筛选下没有读取记录</div>';
+    return;
+  }
+  var dom = readDomain(), a = dom[0], b = dom[1];
+  var W = Math.max(380, body.clientWidth || 640);
+  var L = 148, R = 46, plotW = Math.max(120, W - L - R);
+  var laneH = 32, axisH = 24, H = lanes.length * laneH + axisH;
+  function X(t){ return L + (t - a) / (b - a) * plotW; }
+  var svg = el('svg', { width:W, height:H, viewBox:'0 0 ' + W + ' ' + H });
+
+  dayTicks(a, b, 10).forEach(function(d){
+    var x = X(d);
+    el('line', { x1:x, y1:0, x2:x, y2:lanes.length*laneH, 'class':'gl' }, svg);
+    var t = el('text', { x:x, y:lanes.length*laneH + 15, 'class':'tick', 'text-anchor':'middle' }, svg);
+    t.textContent = fmtDay(d);
+  });
+  el('line', { x1:L, y1:lanes.length*laneH, x2:L+plotW, y2:lanes.length*laneH, 'class':'ax' }, svg);
+
+  lanes.forEach(function(s, i){
+    var y = i * laneH + laneH/2;
+    el('line', { x1:L, y1:y, x2:L + plotW, y2:y, 'class':'gl' }, svg);
+    var lb = el('text', { x:L - 12, y:y + (!skillMissing(s.path) && skillStateLabel(s.path) ? -3 : 4), 'class':'lab', 'text-anchor':'end' }, svg);
+    lb.textContent = s.name;
+    if (skillMissing(s.path)) lb.setAttribute('text-decoration','line-through');
+    else svgStateBadge(svg, L-12, y+2, skillStateLabel(s.path));
+    var mine = reads.filter(function(r){ return r.skill === s.path; })
+      .sort(function(p,q){ return p._t - q._t; });
+    var cl = [];
+    mine.forEach(function(r){
+      var x = X(r._t), last = cl[cl.length-1];
+      if (last && x - last.x < 11){ last.rs.push(r); last.x = (last.x * (last.rs.length-1) + x) / last.rs.length; }
+      else cl.push({ x:x, rs:[r] });
+    });
+    cl.forEach(function(c){
+      el('circle', { cx:c.x, cy:y, r:c.rs.length > 1 ? 6 : 5, 'class':'dot-ring',
+        style:'fill:var(' + s.slot + ')' }, svg);
+      if (c.rs.length > 1){
+        var n = el('text', { x:c.x + 9, y:y - 6, 'class':'tick' }, svg);
+        n.textContent = '×' + c.rs.length;
+      }
+      var hit = el('circle', { cx:c.x, cy:y, r:13, 'class':'hit' }, svg);
+      bindTip(hit, '<div class="t-h">' + swatch(s.slot) + skillNameHTML(s.path, s.name) + skillStateBadge(s.path) + '</div>' +
+        c.rs.map(function(r){
+          return '<div class="t-r">' + fmtMin(r._t) + ' · <span class="mono">' + esc(shortId(r.session_id)) +
+            '</span> · ' + esc(r.source) + ' · ' + esc(r.read_method || '—') + '</div>';
+        }).join(''));
+    });
+    var tot = el('text', { x:L + plotW + 8, y:y + 4, 'class':'val' }, svg);
+    tot.textContent = mine.length + ' 次';
+  });
+  body.appendChild(svg);
+  tableToggle($('tl-foot'), ['时间（北京）','Skill','会话','来源'], reads.slice()
+    .sort(function(p,q){ return p._t - q._t; })
+    .map(function(r){
+      return [fmtFull(r._t), esc(r._name), '<span class="mono">' + esc(shortId(r.session_id)) + '</span>', esc(r.source)];
+    }), '时间表');
+}
+/* ============================================================
+   会话清单（含迷你轨迹条）
+   ============================================================ */
+function miniStrip(s, w){
+  var a = D.t0, b = D.t1, h = 18, pad = 5;
+  var svg = el('svg', { width:w, height:h, viewBox:'0 0 ' + w + ' ' + h });
+  function X(t){ return pad + (t - a) / (b - a || 1) * (w - pad*2); }
+  el('line', { x1:pad, y1:h/2, x2:w-pad, y2:h/2, 'class':'gl' }, svg);
+  if (!isNaN(s._t)){
+    var x = X(s._t);
+    el('line', { x1:x, y1:3, x2:x, y2:h-3, style:'stroke:var(--axis);stroke-width:1' }, svg);
+  }
+  var rs = sessionReads(s);
+  rs.forEach(function(r){
+    el('circle', { cx:X(r._t), cy:h/2, r:3.5, 'class':'dot-ring',
+      style:'fill:var(' + D.slotOf(r.skill) + ')' }, svg);
+  });
+  var hit = el('rect', { x:0, y:0, width:w, height:h, 'class':'hit' }, svg);
+  bindTip(hit, '<div class="t-h"><span class="mono">' + esc(shortId(s.session_id)) + '</span></div>' +
+    '<div class="t-r">最近活跃 ' + (isNaN(s._t) ? '—' : fmtFull(s._t)) + '（细竖线）</div>' +
+    (rs.length ? rs.map(function(r){
+      return '<div class="t-r">' + swatch(D.slotOf(r.skill)) + ' ' + fmtMin(r._t) + ' · ' + esc(r._name) + '</div>';
+    }).join('') : '<div class="t-r muted">该会话没有确认读取</div>'));
+  return svg;
+}
+function visibleRows(rows, key){
+  return S[key] ? rows : rows.slice(0,10);
+}
+function renderExpansion(host, key, total, rerender){
+  if (total <= 10) return;
+  var foot = document.createElement('div');
+  foot.className = 'chart-foot';
+  var button = document.createElement('button');
+  button.type = 'button'; button.className = 'btn';
+  button.setAttribute('aria-expanded', String(!!S[key]));
+  button.textContent = S[key] ? '收起 · 只显示前 10 条' : '展开全部 ' + total + ' 条（已显示 10 条）';
+  button.onclick = function(){
+    var collapsing = !!S[key]; S[key] = !S[key]; rerender();
+    if (collapsing && host.scrollIntoView) host.scrollIntoView({block:'start'});
+  };
+  foot.appendChild(button); host.appendChild(foot);
+}
+function renderSessions(){
+  var host = $('c-sessions');
+  var list = activeSessions().slice();
+  if (S.sessSort === 'reads'){
+    list.sort(function(p,q){ return sessionReads(q).length - sessionReads(p).length || (q._t||0) - (p._t||0); });
+  }
+  var withReads = list.filter(function(s){ return sessionReads(s).length > 0; }).length;
+  host.innerHTML =
+    '<div class="chart-head"><h3>' + list.length + ' 个会话 · ' + withReads + ' 个有确认读取</h3>' +
+    '<span class="note" id="sess-sort"></span></div>' +
+    '<div class="tbl-wrap" style="margin-top:8px"><table><thead><tr>' +
+      '<th>会话</th><th>最近活跃</th><th>确认读取</th><th>候选片段</th><th>问题</th>' +
+      '<th>轨迹（' + fmtDay(D.t0) + ' → ' + fmtDay(D.t1) + '）</th><th></th>' +
+    '</tr></thead><tbody id="sess-body"></tbody></table></div>' +
+    '<div class="chart-foot"><span class="muted" style="font-size:11px">候选片段 = 扫描阶段命中的待确认证据，不等于有效读取；确认口径见下方限制说明。</span></div>';
+
+  var sortBox = $('sess-sort');
+  [['tree','父子结构'], ['reads','按读取数']].forEach(function(o){
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn'; b.textContent = o[1];
+    b.setAttribute('aria-pressed', String((S.sessSort || 'tree') === o[0]));
+    b.style.marginLeft = '6px';
+    b.onclick = function(){ S.sessSort = o[0]; renderSessions(); };
+    sortBox.appendChild(b);
+  });
+  var tb = $('sess-body');
+  visibleRows(list, 'sessionsExpanded').forEach(function(s){
+    var rs = sessionReads(s);
+    var depth = (S.sessSort === 'reads') ? 0 : (s._depth || 0);
+    var m = D.srcMeta[s.source] || { slot:'--s5' };
+    var tr = document.createElement('tr');
+    tr.id = 'session-'+encodeURIComponent(s._key);
+    tr.className = 'srow' + (rs.length ? '' : ' zero');
+    tr.innerHTML =
+      '<td><span style="padding-left:' + (depth*15) + 'px">' +
+        (depth ? '<span class="muted" style="margin-right:4px">└</span>' : '') +
+        '<span class="pill"><span class="dot" style="background:var(' + m.slot + ')"></span>' + esc(s.source) + '</span> ' +
+        '<span class="mono">' + esc(shortId(s.session_id)) + '</span></span></td>' +
+      '<td class="n">' + (isNaN(s._t) ? '—' : fmtMin(s._t)) + '</td>' +
+      '<td class="n"><span class="dots">' + rs.map(function(r){
+          return '<i style="background:var(' + D.slotOf(r.skill) + ')" title="' + esc(r._name) + '"></i>';
+        }).join('') + (rs.length ? '<span style="margin-left:5px">' + rs.length + '</span>' : '<span class="muted">0</span>') +
+        '</span></td>' +
+      '<td class="n muted">' + s._cand + '</td>' +
+      '<td class="n">' + (s._prob ? '<span class="badge crit">' + s._prob + '</span>' : '<span class="muted">0</span>') + '</td>' +
+      '<td class="strip"></td>' +
+      '<td class="muted" style="text-align:right">详情 ▾</td>';
+    tb.appendChild(tr);
+    tr.querySelector('.strip').appendChild(miniStrip(s, 210));
+
+    var dtr = document.createElement('tr');
+    dtr.className = 'detail hidden';
+    var td = document.createElement('td');
+    td.colSpan = 7;
+    td.innerHTML = '<dl class="kv">' +
+      '<dt>会话 ID</dt><dd class="mono">' + esc(s.session_id) + copyBtn(s.session_id) + '</dd>' +
+      (s.key ? '<dt>key</dt><dd class="mono">' + esc(s.key) + '</dd>' : '') +
+      (s.parent_session ? '<dt>父会话</dt><dd class="mono">' + esc(s.parent_session) + '</dd>' : '') +
+      (s.project ? '<dt>工程</dt><dd class="mono">' + esc(s.project) + '</dd>' : '') +
+      ((s.skills_roots || []).length ? '<dt>Skill 根目录</dt><dd class="mono">' + esc(s.skills_roots.join('、')) + '</dd>' : '') +
+      (s.snapshot_sha256 ? '<dt>快照 sha256</dt><dd class="mono">' + esc(s.snapshot_sha256) + copyBtn(s.snapshot_sha256) + '</dd>' : '') +
+      (s.manifest ? '<dt>manifest</dt><dd class="mono">' + esc(s.manifest) + copyBtn(s.manifest) + '</dd>' : '') +
+      (s.events ? '<dt>事件</dt><dd>' + s._events + ' 条</dd>' : '') +
+      (s._prob ? '<dt>问题</dt><dd>' + esc(JSON.stringify(s.problems)) + '</dd>' : '') +
+      '<dt>候选片段 (' + s._cand + ')</dt><dd class="mono" style="line-height:1.8">' +
+        ((s.candidates || []).map(function(c){ return '<span class="badge">' + esc(c) + '</span>'; }).join(' ') || '无') +
+      '</dd></dl>';
+    dtr.appendChild(td);
+    tb.appendChild(dtr);
+    tr.onclick = function(e){
+      if (e.target.closest && e.target.closest('.copy')) return;
+      var on = dtr.classList.toggle('hidden');
+      tr.lastElementChild.innerHTML = on ? '详情 ▾' : '收起 ▴';
+    };
+  });
+  renderExpansion(host, 'sessionsExpanded', list.length, renderSessions);
+  if (!list.length) tb.innerHTML = '<tr><td colspan="7"><div class="empty">当前筛选下没有会话</div></td></tr>';
+}
+function copyBtn(v){
+  if (!v) return '';
+  return '<button class="copy" type="button" data-copy="' + esc(v) + '">复制</button>';
+}
+/* ============================================================
+   读取明细
+   ============================================================ */
+var READ_COLS = [
+  { k:'t',      t:'时间（北京）', v:function(r){ return r._t; } },
+  { k:'skill',  t:'Skill',       v:function(r){ return r._name; } },
+  { k:'sess',   t:'会话',        v:function(r){ return r.session_id; } },
+  { k:'source', t:'来源',        v:function(r){ return r.source; } },
+  { k:'method', t:'读取方式',    v:function(r){ return r.read_method || ''; } },
+  { k:'status', t:'状态',        v:function(r){ return r.status || ''; } },
+  { k:'loc',    t:'原始定位',    v:null }
+];
+function renderReads(review){
+  var host = $(review ? 'c-review' : 'c-reads');
+  var reads = review ? D.reviewReads.filter(function(r){ return S.sources[r.source] !== false; }) : activeReads().slice();
+  var sk = S.readSort || { k:'t', dir:1 };
+  var col = READ_COLS.filter(function(c){ return c.k === sk.k; })[0];
+  if (col && col.v){
+    reads.sort(function(p,q){
+      var a = col.v(p), b = col.v(q);
+      return (a < b ? -1 : a > b ? 1 : 0) * sk.dir;
+    });
+  }
+  host.innerHTML =
+    '<div class="chart-head"><h3>' + reads.length + (review ? ' 条待核对 / 失败记录</h3>' : ' 次确认读取</h3>') +
+    '<span class="note">点击表头排序 · 路径可复制</span></div>' +
+    '<div class="tbl-wrap" style="margin-top:8px"><table><thead><tr>' +
+    READ_COLS.map(function(c){
+      var on = c.k === sk.k;
+      return '<th' + (c.v ? ' class="sortable" data-k="' + c.k + '"' : '') + '>' + esc(c.t) +
+        (on ? '<span class="arw">' + (sk.dir > 0 ? '▲' : '▼') + '</span>' : '') + '</th>';
+    }).join('') + '</tr></thead><tbody>' +
+    (reads.length ? visibleRows(reads, review ? 'reviewExpanded' : 'readsExpanded').map(function(r){
+      var m = D.srcMeta[r.source] || { slot:'--s5' };
+      var locs = (r.result_locations || []).map(function(l){
+        return esc(l.location) + (l.file && l.file !== r.original_file ? ' <span class="muted">(另一文件)</span>' : '');
+      }).join('、');
+      var ok = r.status === 'confirmed';
+      return '<tr>' +
+        '<td class="n">' + (isNaN(r._t) ? '—' : fmtFull(r._t)) + '</td>' +
+        '<td>' + swatch(D.slotOf(r.skill)) + ' ' + skillNameHTML(r.skill, r._name) + skillStateBadge(r.skill) + '</td>' +
+        '<td class="mono" title="' + esc(r.session_id) + '">' + esc(shortId(r.session_id)) + '</td>' +
+        '<td><span class="pill"><span class="dot" style="background:var(' + m.slot + ')"></span>' + esc(r.source) + '</span></td>' +
+        '<td>' + esc(r.read_method || '—') + ' <span class="muted">/ ' + esc(r.time_basis || '—') + '</span></td>' +
+        '<td><span class="badge ' + (ok ? 'good' : 'crit') + '">' + esc(r.status || '—') + '</span>' +
+          (r.reason ? '<div class="muted" style="font-size:11px">' + esc(r.reason) + '</div>' : '') + '</td>' +
+        '<td><span class="path" title="' + esc(r.original_file || '') + '">' + esc(midElide(r.original_file, 22, 40)) + '</span>' +
+          copyBtn(r.original_file) +
+          '<div class="muted" style="font-size:11px;margin-top:3px">请求 ' + esc(r.request_location || '—') +
+          (locs ? ' · 结果 ' + locs : '') + ' · call ' + esc(r.call_id || '—') + '</div></td>' +
+      '</tr>';
+    }).join('') : '<tr><td colspan="7"><div class="empty">当前筛选下没有读取记录</div></td></tr>') +
+    '</tbody></table></div>';
+  renderExpansion(host, review ? 'reviewExpanded' : 'readsExpanded', reads.length, function(){renderReads(review);});
+  host.querySelectorAll('th.sortable').forEach(function(th){
+    th.onclick = function(){
+      var k = th.getAttribute('data-k');
+      S.readSort = (sk.k === k) ? { k:k, dir:-sk.dir } : { k:k, dir:1 };
+      renderReads(review);
+    };
+  });
+}
+/* ============================================================
+   口径与限制
+   ============================================================ */
+function renderLimits(){
+  var ex = D.extraction, sc = D.scope, p = D.period;
+  var lims = ex.limitations || [];
+  $('c-limits').innerHTML =
+    '<div class="grid two" style="grid-template-columns:minmax(0,1.15fr) minmax(0,0.85fr);gap:24px">' +
+      '<div><div class="chart-head"><h3>限制（报告正文）</h3></div>' +
+        (lims.length
+          ? '<ul class="lim" style="margin-top:10px">' + lims.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>'
+          : '<div class="empty">报告未声明限制</div>') +
+        '<div class="chart-head" style="margin-top:20px"><h3>本页读法</h3></div>' +
+        '<ul class="lim" style="margin-top:10px">' +
+          '<li>顶部筛选行同时充当色板图例，所有图表与表格共用同一切片。</li>' +
+          '<li>标有 ※ 的指标为报告口径，不随筛选变化。</li>' +
+          '<li>Skill 配色按名称字母序固定分配，筛选不会给留下来的项换色。</li>' +
+          '<li>每张图都带表格孪生视图，颜色不是唯一的信息通道。</li>' +
+        '</ul></div>' +
+      '<div><div class="chart-head"><h3>报告元数据</h3></div>' +
+        '<dl class="kv" style="margin-top:12px">' +
+          '<dt>schema</dt><dd>' + esc(D.raw.schema_version || '—') + ' · ' + esc(D.raw.kind || '—') + '</dd>' +
+          '<dt>提取方法</dt><dd class="mono">' + esc(ex.method || '—') + '</dd>' +
+          '<dt>提取状态</dt><dd>' + esc(ex.status || '—') + '</dd>' +
+          '<dt>采集区间</dt><dd>' + ((ts(p.from) <= 0 || !p.from) ? '全量历史' : esc(p.from)) + '<br>→ ' + esc(p.to_exclusive || '—') + '</dd>' +
+          '<dt>时区</dt><dd>' + esc(p.timezone || '—') + '</dd>' +
+          '<dt>选取</dt><dd>' + esc(sc.selection || '—') + ' · limit ' + (sc.limit == null ? '—' : sc.limit) +
+            ' · days ' + (sc.days == null ? 'null' : sc.days) + '</dd>' +
+          '<dt>来源</dt><dd>' + esc((sc.sources || []).join('、') || '—') + '</dd>' +
+          '<dt>排除会话</dt><dd>' + esc((sc.excluded_sessions || []).join('、') || '无') + '</dd>' +
+          '<dt>Skill 根</dt><dd class="mono">' + esc((ex.skills_roots || sc.skills_roots || []).join('、') || '—') + '</dd>' +
+        '</dl></div>' +
+    '</div>';
+}
+/* ============================================================
+   渲染编排
+   ============================================================ */
+function analysisEvidenceHTML(rows){
+  return (rows||[]).map(function(e){
+    if(e.kind==='statistic')return '<li>'+esc(e.skill)+' · '+esc(e.metric)+' = '+esc(e.value)+'</li>';
+    var location=e.kind==='history' ? e.session+' · '+e.event_id+' · 片段 '+e.part : e.path+' · 第 '+e.start+' 行';
+    return '<li><span class="mono">'+esc(location)+'</span><blockquote style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(e.quote)+'</blockquote></li>';
+  }).join('');
+}
+function renderAnalysis(){
+  var a=D.raw.analysis,host=$('c-analysis');
+  $('analysis-section').hidden=!a;
+  if(!a){host.innerHTML='';return;}
+  var categories={retain:'保留',improve:'改进',merge:'合并候选',retire:'淘汰候选',add:'新增候选'};
+  var actions={none:'保留观察',add_example:'补充案例',fix_rule:'修订规则',clarify_boundary:'补充适用边界',improve_trigger:'改进触发描述',update_script:'修改辅助脚本',merge:'合并',retire:'淘汰候选',add:'新增候选'};
+  var causes={skill:'Skill内容',agent:'Agent执行',environment:'环境',user_change:'需求变化',unknown:'无法确定'};
+  var states={still_applicable:'当前仍适用',already_fixed:'当前已修复',unavailable:'未核对或不可用'};
+  host.innerHTML='<p>'+esc(a.overview)+'</p><p class="muted">'+esc(a.model||'')+' · '+esc(a.generated_at||'')+' · '+esc(a.status)+' · 不随统计筛选变化</p>'+
+    ((a.findings||[]).length?'':'<p>本轮未提出改进建议，请结合未覆盖说明阅读。</p>')+
+    (a.findings||[]).map(function(f){
+      var caseData=f.regression_case, checks=f.current_check||[];
+      return '<details style="margin:14px 0;border-top:1px solid var(--line);padding-top:12px"><summary>'+esc(categories[f.category]||f.category)+' · '+esc(f.title)+' · '+esc(f.confidence)+'</summary>'+
+        '<dl class="kv"><dt>具体问题</dt><dd>'+esc(f.observation)+'</dd><dt>建议修改</dt><dd>'+esc(f.recommendation)+'</dd>'+
+        (f.change_kind?'<dt>动作 / 原因归属</dt><dd>'+esc(actions[f.change_kind]||f.change_kind)+' / '+esc(causes[f.attribution]||f.attribution)+'</dd>':'')+
+        '<dt>关联Skill</dt><dd>'+(f.skills||[]).map(function(path){
+          var canFocus=D.skills.some(function(x){return x.path===path;});
+          return '<div class="mono">'+esc(path)+(canFocus?' <button class="btn" type="button" data-analysis-skill="'+esc(path)+'">查看读取</button>':'')+'</div>';
+        }).join('')+'</dd>'+
+        (checks.length?'<dt>当前版本核对</dt><dd>'+checks.map(function(x){return '<p>'+esc(x.skill)+' · '+esc(states[x.status]||x.status)+'<br><span class="mono">'+esc(x.sha256||'未绑定正文')+'</span></p>';}).join('')+'</dd>':'')+
+        (f.target?'<dt>候选目标</dt><dd class="mono">'+esc(JSON.stringify(f.target))+'</dd>':'')+
+        '<dt>支持会话</dt><dd>'+(f.supporting_sessions||[]).map(function(key){return '<button class="btn" type="button" data-analysis-session="'+esc(key)+'">'+esc(key)+'</button>';}).join(' ')+
+        (!(f.supporting_sessions||[]).length?'无历史支持会话；不能据此声称验证了实际效果':'')+'</dd>'+
+        '<dt>限制</dt><dd>'+esc(f.limitation)+'</dd><dt>验证方法</dt><dd>'+esc(f.verification)+'</dd></dl>'+
+        (caseData?'<details style="margin:10px 0"><summary>回归案例草稿（尚未运行）</summary><p>任务：'+esc(caseData.task)+'</p><p>预期行为：</p><ul>'+(caseData.expected||[]).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul><p>禁止行为：</p><ul>'+(caseData.forbidden||[]).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul><p>判定方法：'+esc(caseData.verification)+'</p></details>':'')+
+        '<details><summary>支持证据 · '+(f.evidence||[]).length+' 条</summary><ul>'+analysisEvidenceHTML(f.evidence)+'</ul></details>'+
+        '<details><summary>反例证据 · '+(f.counter_evidence||[]).length+' 条</summary><ul>'+analysisEvidenceHTML(f.counter_evidence)+'</ul>'+
+        (!(f.counter_evidence||[]).length?'<p class="muted">本轮未提供反例，不表示不存在反例；检索范围见限制。</p>':'')+'</details></details>';
+    }).join('')+
+    '<p>未覆盖：'+esc((a.uncovered||[]).join('；')||'本轮候选分析无额外缺口')+'</p>';
+  host.querySelectorAll('[data-analysis-skill]').forEach(function(button){
+    button.onclick=function(){
+      var path=button.getAttribute('data-analysis-skill');
+      initState();D.skills.forEach(function(s){S.skills[s.path]=s.path===path;});
+      renderShell();renderAll();$('c-skillbar').scrollIntoView({block:'start'});
+    };
+  });
+  host.querySelectorAll('[data-analysis-session]').forEach(function(button){
+    button.onclick=function(){
+      var key=button.getAttribute('data-analysis-session');
+      initState();S.sessionsExpanded=true;renderShell();renderAll();
+      var row=$('session-'+encodeURIComponent(key));
+      if(row){row.scrollIntoView({block:'center'});row.click();}
+    };
+  });
+}
+function renderAll(){
+  renderAnalysis();
+  $('fState').textContent = filterOn() ? '筛选已生效' : '';
+  renderKPI();
+  renderCoverage();
+  renderAttrs();
+  renderSkillBar();
+  renderTimeline();
+  renderSessions();
+  renderReads();
+  renderReads(true);
+  renderLimits();
+  hideTip();
+}
+/* ============================================================
+   交互外围：主题 / 复制 / 导入 / 尺寸
+   ============================================================ */
+function applyTheme(t){
+  if (t) document.documentElement.setAttribute('data-theme', t);
+  else document.documentElement.removeAttribute('data-theme');
+  var dark = t === 'dark' || (!t && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  $('themeBtn').textContent = dark ? '浅色' : '深色';
+}
+function initChrome(){
+  var saved = null;
+  try { saved = localStorage.getItem('skillReportTheme'); } catch (e) {}
+  applyTheme(saved);
+  $('themeBtn').onclick = function(){
+    var cur = document.documentElement.getAttribute('data-theme');
+    var dark = cur ? cur === 'dark'
+      : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    var next = dark ? 'light' : 'dark';
+    applyTheme(next);
+    try { localStorage.setItem('skillReportTheme', next); } catch (e) {}
+    if (D) renderAll();
+  };
+  $('printBtn').onclick = function(){ window.print(); };
+  $('importBtn').onclick = function(){ $('fileInput').click(); };
+  $('fileInput').onchange = function(e){
+    var f = e.target.files && e.target.files[0];
+    if (f) readFile(f);
+  };
+  document.addEventListener('click', function(e){
+    var b = e.target.closest && e.target.closest('.copy');
+    if (!b) return;
+    e.stopPropagation();
+    var v = b.getAttribute('data-copy'), old = b.textContent;
+    var done = function(){ b.textContent = '已复制'; setTimeout(function(){ b.textContent = old; }, 1200); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, done);
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = v; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+  var drop = $('drop');
+  ['dragenter','dragover'].forEach(function(t){
+    window.addEventListener(t, function(e){ e.preventDefault(); drop.classList.add('on'); });
+  });
+  ['dragleave','drop'].forEach(function(t){
+    window.addEventListener(t, function(e){ e.preventDefault(); if (t === 'dragleave' && e.relatedTarget) return; drop.classList.remove('on'); });
+  });
+  window.addEventListener('drop', function(e){
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) readFile(f);
+  });
+  var timer = null;
+  window.addEventListener('resize', function(){
+    if (!D) return;
+    clearTimeout(timer);
+    timer = setTimeout(function(){ renderCoverage(); renderSkillBar(); renderTimeline(); renderSessions(); }, 160);
+  });
+}
+function readFile(f){
+  var fr = new FileReader();
+  fr.onload = function(){
+    try { boot(JSON.parse(fr.result)); }
+    catch (err) { alert('JSON 解析失败：' + err.message); }
+  };
+  fr.readAsText(f);
+}
+function boot(raw){
+  D = normalize(raw);
+  initState();
+  S.sessSort = 'tree';
+  S.readSort = { k:'t', dir:1 };
+  renderShell();
+  renderAll();
+}
+initChrome();
+if (RAW && RAW.sessions) boot(RAW);
+else {
+  document.querySelector('.wrap').innerHTML =
+    '<div class="card" style="margin-top:24px"><div class="chart-head"><h3>没有内嵌数据</h3></div>' +
+    '<p class="sub">把 <span class="mono">skill-audit history --collect-only</span> 生成的 ' +
+    '<span class="mono">report.json</span> 拖到本页，或点右上角「导入 JSON」。</p></div>';
+}
+</script>
+</body>
+</html>
+
