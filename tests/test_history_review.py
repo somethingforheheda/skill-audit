@@ -25,6 +25,9 @@ class HistoryTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='skill-history-test-')
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
+        # Reports default to ~/.skill-audit/reports; never let a test write into the real one.
+        env = patch.dict(os.environ, {'SKILL_AUDIT_HOME': str(self.home / 'audit-home')})
+        env.start(); self.addCleanup(env.stop)
         self.project = self.home / 'project'
         self.project.mkdir()
         self.now = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
