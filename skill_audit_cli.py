@@ -527,7 +527,7 @@ def build_parser():
     check.set_defaults(run=cmd_check)
     analysis_reader=commands.add_parser('analysis-read',help='汇总Agent共用的有界证据读取工具')
     analysis_reader.add_argument('manifest',type=Path)
-    analysis_reader.add_argument('action',choices=('skill','rule','read','event','session','search','window','skill-sessions'))
+    analysis_reader.add_argument('action',choices=('summary','policy','skill','rule','read','event','session','search','window','skill-sessions'))
     analysis_reader.add_argument('--path')
     analysis_reader.add_argument('--start',type=int,default=1)
     analysis_reader.add_argument('--read-id')

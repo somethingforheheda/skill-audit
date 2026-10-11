@@ -337,6 +337,13 @@ def lookup(args):
                   '统计摘要已改变，请重新准备分析')
     report = read_json(manifest['report'])
     summary = read_json(manifest['summary'])
+    if args.action == 'summary':
+        return h.redact_data(summary)
+    if args.action == 'policy':
+        policy_path = args.manifest.parent / 'policy.json'
+        h.require(digest_file(policy_path) == manifest['policy_sha256'],
+                  '汇总策略已改变，请重新准备分析')
+        return h.redact_data(read_json(policy_path))
     if args.action in ('skill', 'rule'):
         return file_piece(summary, args.action, args.path, args.start)
     if args.action == 'skill-sessions':
@@ -630,15 +637,15 @@ def run(args,cli):
     entry=Path(cli.__file__).resolve()
     if not entry.is_file():entry=entry.parent
     helper=shlex.join([sys.executable,str(entry),'analysis-read',str(state/'manifest.json')])
-    prompt=('你是 Skill 汇总治理总控 Agent。先读取 summary.json 和 policy.json；仅输出 policy.output_example 的结构，不输出Markdown围栏。'
+    prompt=('你是 Skill 汇总治理总控 Agent。先执行下面的 summary_read 和 policy_read 命令获取统计摘要和汇总策略；仅输出策略中 output_example 的结构，不输出Markdown围栏。'
         +('允许自主创建子代理；按候选Skill/问题分治，禁止逐会话全量派发。' if delegation else
           '当前执行后端不支持原生子代理：由你一人按候选Skill/问题分批取证，忽略策略中关于创建子代理的说明。')
         +'不要改文件。\n'
         +'取证规则（子代理同样适用，派发时原样转告）：Bash 只能单行执行下面给出的命令，原样复制命令前缀再接参数；'
-          '不要用变量赋值、换行、管道、&&、;、heredoc，否则会被拒绝。Skill/规则正文只能用 skill_read/rule_read 获取，Read 工具读不到工作目录外的文件。'
+          '不要用变量赋值、换行、管道、&&、;、heredoc，否则会被拒绝。摘要、策略、Skill和规则正文均通过下面的命令获取，不依赖专用Read工具。'
           'quote 必须是工具返回文本中连续的原文（8–600字），按显示出来的文字抄写即可，转义符、中英文引号、反引号和空白差异会被忽略，措辞不能改；需要跳过中间内容时拆成多条证据，不要用省略号连接。'
           '最终回复只包含一个 JSON 对象，前后不要有任何说明文字。\n'
-        +json.dumps({'summary':str(state/'summary.json'),'policy':str(state/'policy.json'),
+        +json.dumps({'summary_read':helper+' summary','policy_read':helper+' policy',
             'skill_read':helper+' skill --path <白名单路径> --start 1',
             'rule_read':helper+' rule --path <规则路径> --start 1',
             'search_in_session':helper+' search --session <source:id> --query <关键词> --limit 5 --offset 0',

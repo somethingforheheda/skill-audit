@@ -1,5 +1,7 @@
 import copy
 import json
+import shlex
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -32,6 +34,33 @@ class AnalysisTests(unittest.TestCase):
         summary=a.read_json(state/'summary.json')
         self.assertEqual(summary['skills'][0]['reads'],0)
         self.assertEqual(summary['skills'][0]['current']['status'],'present')
+    def test_bootstrap_context_commands_without_read_tool(self):
+        def fake_codex(binary, data, root, prompt, timeout, control=None, **kwargs):
+            commands = json.loads(next(line for line in prompt.splitlines() if line.startswith('{"summary_read"')))
+            outputs = {}
+            for name in ('summary_read', 'policy_read'):
+                result = subprocess.run(shlex.split(commands[name]), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                outputs[name] = json.loads(result.stdout)
+            self.assertEqual(outputs['summary_read']['skills'][0]['skill'], str(self.skill))
+            self.assertEqual(outputs['policy_read'], a.POLICY)
+            self.assertIn('不依赖专用Read工具', prompt)
+            return json.dumps(self.result())
+        with patch.object(codex_backend,'codex_binary',return_value='fake'),patch.object(codex_backend,'config_get',return_value={'model':'fixture','token_env':'NO_REAL_KEY'}),patch.object(codex_backend,'token_present'),patch.object(codex_backend,'run_codex',side_effect=fake_codex):
+            self.assertEqual(a.run(self.args(),cli),0)
+
+    def test_bootstrap_context_rejects_changed_files(self):
+        args=self.args();args.prepare_only=True;a.run(args,cli)
+        state=next((self.root/'analysis-runs').iterdir())
+        for action, message in (('summary', '统计摘要已改变'), ('policy', '汇总策略已改变')):
+            with self.subTest(action=action):
+                path=state/(action+'.json');original=path.read_bytes()
+                path.write_text('{}')
+                try:
+                    with self.assertRaisesRegex(ValueError,message):
+                        a.lookup(SimpleNamespace(manifest=state/'manifest.json',action=action))
+                finally:
+                    path.write_bytes(original)
     def test_single_agent_and_immutable_input(self):
         original=self.path.read_bytes()
         with patch.object(codex_backend,'codex_binary',return_value='fake'),patch.object(codex_backend,'config_get',return_value={'model':'fixture','token_env':'NO_REAL_KEY'}),patch.object(codex_backend,'token_present'),patch.object(codex_backend,'run_codex',return_value=json.dumps(self.result())) as run:
