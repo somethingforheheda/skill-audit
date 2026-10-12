@@ -13,7 +13,20 @@ skill-audit init --backend claude-code --model "<模型全名>"            # 保
 skill-audit doctor --probe --backend claude --model "<模型全名>"       # 一次小请求，确认可用
 ```
 
-也可以用打好的 `dist/skill-audit-team.zip`：解压后运行其中的 `install.sh`，不需要源码。升级：`git pull` 后重新 `build_dist.py` 并运行 `install.sh`，已有配置保留；安装会覆盖 `~/.skill-audit/rules/` 下的条例 JSON，改过的先另存。
+也可以用 GitHub Release 里的 `skill-audit-team.zip`：解压后运行其中的 `install.sh`，不需要源码。
+
+## 升级
+
+```bash
+skill-audit update --check      # 只看有没有新版本
+skill-audit update              # 下载最新 Release 并替换自身，配置与报告保留
+skill-audit update --version 0.12.0   # 装指定版本（回退用）
+```
+
+- 只在你手动运行时才升级。`history`/`review`/`cross`/`doctor` 在终端里运行结束时，最多每天联网查一次，有新版本只打印一行提示；`skill-audit update --notify off` 关闭（也可设环境变量 `SKILL_AUDIT_NO_UPDATE_CHECK=1`）。非终端环境（脚本、Hook）和 `lint` 不检查。
+- 下载后先核对 GitHub 记录的 SHA-256，再让新包自己运行一次 `--version` 自检，通过才原子替换；任何一步失败都不改动当前版本。
+- `~/.skill-audit/rules/` 里没改过的条例会随新版本更新；改过的原样保留，新版默认条例另存为 `*.new`。
+- 只支持 `install.sh` 装出的发行包。源码目录请 `git pull` 后 `python3 build_dist.py && sh install.sh`（会覆盖 rules/ 下的条例，改过的先另存）。0.12.0 及更早版本没有 `update` 命令，需要手动装一次 0.13.0。
 
 ## 配置
 
@@ -44,6 +57,7 @@ skill-audit check single r.json --repo-root .           # 复查已有 review/cr
 skill-audit history --skills-root .agents/skills --limit 30   # 历史会话复盘，见下节
 skill-audit reports [--prune --keep 5 [--yes] [--all]]  # 列出 / 清理历史报告，默认试运行
 skill-audit probe-agents --backend claude               # 测试后端的原生子代理委派
+skill-audit update [--check]                            # 升级本工具，见上节
 ```
 
 review/cross 会自动校验 AI 输出的 JSON 结构、计数与原文定位；格式通过不代表语义判断正确。`--rules-file` 可临时换条例。
@@ -76,6 +90,7 @@ caffeinate -i skill-audit history --skills-root .agents/skills --limit 30 \
 ## 隐私与只读
 
 - 被引用的历史片段会进入所选模型服务的上下文，不是纯本地分析；除此之外不上传任何数据。
+- 联网只有两处：所选后端访问模型服务，以及 `update`/每日版本提示访问 `api.github.com` 与 GitHub Release 下载地址（只读公开信息，不带任何本地数据）。
 - 快照、报告、草稿含历史对话原文，按 0700/0600 私有权限保存；脱敏只覆盖已知令牌和常见凭据格式，不保证识别全部敏感信息，分享报告前请自查。
 - 只读保证：Codex 用操作系统沙箱 `--sandbox read-only`；Claude Code 只开放 Read/Grep/Glob（history 额外只放行 `analysis-read` 一个命令前缀），以 `--restricted --safe-mode` 隔离用户 hooks、插件、MCP 与 Skill。
 
@@ -89,9 +104,11 @@ caffeinate -i skill-audit history --skills-root .agents/skills --limit 30 \
 - 新增后端：在 `agent_backends/` 加一个模块，声明必备保证、可选能力和认证方式并实现 `ready/run`，命令行选项、doctor 与打包自动包含。
 - 测试：`python3 -m unittest discover -s tests`（临时夹具，不读真实历史、不请求模型）；`node tests/test_report_status.cjs` 检查 HTML 模板。
 - 打包：`python3 build_dist.py` 生成 `dist/skill-audit.pyz` 与 `dist/skill-audit-team.zip`。
+- 发版：改 `skill_audit_cli.py` 的 `APP_VERSION` 和下方版本记录，推送后在 GitHub 建 tag `vX.Y.Z` 的 Release，并上传 `skill-audit.pyz`（文件名固定，`update` 按名字找）与 `skill-audit-team.zip`。
 
 ## 版本
 
+- **0.13.0**：新增 `skill-audit update`（从 GitHub Release 升级，含校验与自检）和每日最多一次的新版本提示。
 - **0.12.0**：网关改为可选配置，不内置任何组织地址；新增受信任网关列表；移除已被 0.9 汇总流程取代的逐会话 AI 复盘遗留代码（`check history`、`history-read`、历史复盘条例 JSON、`--jobs`/`--batch-chars`）及 0.8.12 前旧目录回退。
 - **0.11.0**：多执行后端（Codex / Claude Code），能力协商与降级，可分别指定主模型和子代理模型；证据比对容忍转义/引号差异，校验一次列出全部错误，续跑先复核草稿。
 - **0.10.0**：证据驱动的改进建议（summary-v2）。

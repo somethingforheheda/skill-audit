@@ -29,6 +29,7 @@ APP_FILES = (
     "history_report.html",
     "codex_process.py",
     "audit_config.py",
+    "self_update.py",
     "单Skill语义审核条例.json",
     "全量跨Skill语义审核条例.json",
 )

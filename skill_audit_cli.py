@@ -22,12 +22,13 @@ import codex_process
 import audit_paths
 import audit_config as cfg
 import agent_backends
+import self_update
 # AuditTimeout is re-exported: history_analysis reaches backend errors through this module.
 from agent_backends.base import AgentTask, AuditError, AuditTimeout, Need, check_models  # noqa: F401
 
 
 PYYAML_REQUIREMENT = "PyYAML>=6.0,<7"
-APP_VERSION = "0.12.0"
+APP_VERSION = "0.13.0"
 
 
 AuditCancelled = codex_process.Cancelled
@@ -163,6 +164,10 @@ def cmd_lint(args):
             command.append("--text")
         return subprocess.run(command).returncode
     return skill_lint.main(argv)
+
+
+def cmd_update(args):
+    return self_update.run(args, APP_VERSION)
 
 
 def cmd_check(args):
@@ -580,6 +585,11 @@ def build_parser():
     reports.add_argument("--all", action="store_true", help="连报告 JSON/HTML 一起删，默认只删 snapshots/")
     reports.add_argument("--yes", action="store_true", help="确认执行清理")
     reports.set_defaults(run=cmd_reports)
+    update = commands.add_parser("update", help="从 GitHub Release 升级本工具（不会自动执行，需手动运行）")
+    update.add_argument("--check", action="store_true", help="只检查是否有新版本，不下载")
+    update.add_argument("--version", help="安装指定版本（x.y.z，可用于回退）；省略则装最新")
+    update.add_argument("--notify", choices=("on", "off"), help="开关「有新版本」提示（每天最多联网检查一次），只改设置不升级")
+    update.set_defaults(run=cmd_update)
     for name, run in (("review", cmd_review), ("cross", cmd_cross)):
         command = commands.add_parser(name, help="主动执行单 Skill 审核" if name == "review" else "主动执行全库跨 Skill 审核")
         if name == "review":
@@ -604,7 +614,9 @@ def main(argv=None):
     if getattr(args, "timeout", 1) < 1 or getattr(args, "attempts", 1) < 1:
         parser.error("timeout 和 attempts 必须大于 0")
     try:
-        return args.run(args)
+        code = args.run(args)
+        self_update.maybe_hint(args.command, APP_VERSION)
+        return code
     except (KeyboardInterrupt, AuditCancelled):
         print("已取消。", file=sys.stderr)
         return 130
