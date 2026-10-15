@@ -429,17 +429,17 @@ def trim_ellipsis(text):
 
 
 def validate_evidence(evidence, finding, report, summary, known, field='evidence'):
+    """kinds, marks — marks[i] = {'ok': bool, 'reason': str|None} lines up with evidence[i]."""
     h.require(isinstance(evidence, list) and len(evidence) <= 12, field + ' 必须是列表，最多12条')
-    kinds, errors = [], []
-    # Every bad item is listed so one repair attempt can fix all of them.
-    for index, e in enumerate(evidence):
+    kinds, marks = [], []
+    for e in evidence:
         try:
-            kinds.append(check_evidence(e, finding, report, summary, known))
-        except (ValueError, KeyError, TypeError) as exc:
-            detail = str(exc) if isinstance(exc, ValueError) else f'{type(exc).__name__}: {exc}'
-            errors.append(f'{field}[{index}] {detail}')
-    h.require(not errors, ' | '.join(errors))
-    return kinds
+            kind, ok, reason = check_evidence(e, finding, report, summary, known)
+        except (KeyError, TypeError) as exc:
+            kind, ok, reason = e.get('kind') if isinstance(e, dict) else None, False, f'{type(exc).__name__}: {exc}'
+        kinds.append(kind)
+        marks.append({'ok': ok, 'reason': reason})
+    return kinds, marks
 
 
 def relocate(e, quote, report, summary):
@@ -472,26 +472,40 @@ def relocate(e, quote, report, summary):
 
 
 def check_evidence(e, finding, report, summary, known):
-    h.require(isinstance(e, dict), '证据必须是对象')
+    """(kind, ok, reason) — never raises; a bad item fails on its own, it does not abort the rest.
+
+    `e` may already carry `_check` from a previous validate() call on the same object (repeated
+    validation of a cached finding, or a retried attempt); it is this function's own output, not
+    part of the model's schema, so it is ignored when checking the field set.
+    """
+    if not isinstance(e, dict):
+        return None, False, '证据必须是对象'
+    fields = set(e) - {'_check'}
     kind = e.get('kind')
     if kind == 'statistic':
-        h.require(set(e) == {'kind', 'skill', 'metric', 'value'} and
-                  isinstance(e['skill'], str) and e['skill'] in finding['skills'] and
-                  e['metric'] in ('reads', 'sessions'), '统计证据字段错误')
-        h.require(type(e['value']) is int and e['value'] == known[e['skill']][e['metric']],
-                  '统计数值不符')
-        return kind
+        if not (fields == {'kind', 'skill', 'metric', 'value'} and
+                isinstance(e['skill'], str) and e['skill'] in finding['skills'] and
+                e['metric'] in ('reads', 'sessions')):
+            return kind, False, '统计证据字段错误'
+        if not (type(e['value']) is int and e['value'] == known[e['skill']][e['metric']]):
+            return kind, False, '统计数值不符'
+        return kind, True, None
     if kind in ('skill', 'rule'):
-        h.require(set(e) == {'kind', 'path', 'start', 'quote'}, '文件证据字段错误')
-        # Other whitelisted skills may be cited for comparison (e.g. overlapping triggers);
-        # current_check still requires evidence from each skill the finding is about.
-        piece = file_piece(summary, kind, e['path'], e['start'])
+        if fields != {'kind', 'path', 'start', 'quote'}:
+            return kind, False, '文件证据字段错误'
+        try:
+            # Other whitelisted skills may be cited for comparison (e.g. overlapping triggers);
+            # current_check still requires evidence from each skill the finding is about.
+            piece = file_piece(summary, kind, e['path'], e['start'])
+        except ValueError as exc:
+            return kind, False, str(exc)
     else:
-        h.require(kind == 'history' and set(e) == {'kind', 'session', 'event_id', 'part', 'quote'},
-                  '历史证据字段错误')
-        h.require(finding['category'] == 'add' or
-                  any(r.get('skill') in finding['skills'] and session_key(r) == e['session']
-                      for r in report['extraction']['reads']), '历史会话未关联建议Skill')
+        if not (kind == 'history' and fields == {'kind', 'session', 'event_id', 'part', 'quote'}):
+            return kind, False, '历史证据字段错误'
+        if not (finding['category'] == 'add' or
+                any(r.get('skill') in finding['skills'] and session_key(r) == e['session']
+                    for r in report['extraction']['reads'])):
+            return kind, False, '历史会话未关联建议Skill'
         try:
             piece = history_piece(report, e['session'], e['event_id'], e['part'])
         except h.HistoryError:
@@ -503,10 +517,10 @@ def check_evidence(e, finding, report, summary, known):
         # crosses a page edge). The text is still verbatim evidence, so locate it and fix the pointer.
         relocate(e, quote, report, summary)
         piece = {'text': e.pop('_located', '')}
-    h.require(quote is not None and 8 <= len(quote) <= 600 and squash(quote) in squash(piece['text']),
-              '证据摘录不匹配或长度不合规：'+json.dumps(e.get('quote'),ensure_ascii=False)[:80]
-              +'（须是工具返回文本中连续的原文8–600字，措辞不可改写；转义/引号/反引号/加粗符号/空白/行首列表符号/全角半角标点差异已忽略；中间不可用省略号拼接，需省略时拆成多条证据）')
-    return kind
+    if quote is None or not (8 <= len(quote) <= 600) or squash(quote) not in squash(piece['text']):
+        return kind, False, ('证据摘录不匹配或长度不合规：' + json.dumps(e.get('quote'), ensure_ascii=False)[:80]
+                              + '（须是工具返回文本中连续的原文8–600字，措辞不可改写；转义/引号/反引号/加粗符号/空白/行首列表符号/全角半角标点差异已忽略；中间不可用省略号拼接，需省略时拆成多条证据）')
+    return kind, True, None
 
 
 def validate(result, report, summary, mark_invalid=False):
@@ -554,11 +568,22 @@ def validate(result, report, summary, mark_invalid=False):
             h.require(all(known[p]['current']['status'] == 'present' for p in f['skills']),
                       '不能建议再次淘汰已不存在的Skill')
         h.require(isinstance(f['evidence'], list) and f['evidence'], '每条建议需要证据')
-        kinds = validate_evidence(f['evidence'], f, report, summary, known)
-        validate_evidence(f['counter_evidence'], f, report, summary, known, 'counter_evidence')
-        h.require(not ({json.dumps(e, sort_keys=True) for e in f['evidence']} &
-                       {json.dumps(e, sort_keys=True) for e in f['counter_evidence']}),
-                  '相同证据不能同时作为支持和反例')
+        # Identity for the dedup check ignores `_check`: it is this function's own annotation,
+        # possibly already present from an earlier validate() pass over the same object.
+        strip = lambda e: json.dumps({k: v for k, v in e.items() if k != '_check'}, sort_keys=True)
+        dup = ({strip(e) for e in f['evidence'] if isinstance(e, dict)} &
+               {strip(e) for e in f['counter_evidence'] if isinstance(e, dict)})
+        kinds, evidence_marks = validate_evidence(f['evidence'], f, report, summary, known)
+        _, counter_marks = validate_evidence(f['counter_evidence'], f, report, summary, known, 'counter_evidence')
+        for item, mark in zip(f['evidence'], evidence_marks):
+            item['_check'] = mark
+        for item, mark in zip(f['counter_evidence'], counter_marks):
+            item['_check'] = mark
+        bad = [f'{field}[{index}] {mark["reason"]}' for field, marks in
+               (('evidence', evidence_marks), ('counter_evidence', counter_marks))
+               for index, mark in enumerate(marks) if not mark['ok']]
+        h.require(not bad, ' | '.join(bad))
+        h.require(not dup, '相同证据不能同时作为支持和反例')
         if f['category'] != 'retain':
             h.require(any(k != 'statistic' for k in kinds), '不能仅凭频次提出修改建议')
         history_sessions = {e['session'] for e in f['evidence'] if e['kind'] == 'history'}
@@ -647,9 +672,17 @@ def validate(result, report, summary, mark_invalid=False):
         h.require(not errors, '；'.join(prefix + detail for _, prefix, detail in errors))
     failed = {index: detail for index, _, detail in errors}
     for index, f in enumerate(result['findings']):
-        if isinstance(f, dict):
-            f['validation'] = ({'status': 'failed', 'errors': failed[index].split(' | ')}
-                               if index in failed else {'status': 'passed'})
+        if not isinstance(f, dict):
+            continue
+        if index in failed:
+            # The finding's shape itself was wrong (e.g. evidence not a list): check() never got far
+            # enough to attach per-item `_check`, so there is nothing to count per evidence item.
+            marks = [item.get('_check') for item in f.get('evidence', []) if isinstance(item, dict)]
+            marks = [m for m in marks if isinstance(m, dict) and 'ok' in m]
+            f['validation'] = {'checked': len(marks), 'passed': sum(m['ok'] for m in marks), 'status': 'failed'}
+        else:
+            marks = [item['_check'] for item in f['evidence']] + [item['_check'] for item in f['counter_evidence']]
+            f['validation'] = {'checked': len(marks), 'passed': sum(m['ok'] for m in marks), 'status': 'passed'}
     if not failed:
         return result
     return {**result, 'status': 'partial',
@@ -680,20 +713,27 @@ def salvage(state, report, summary):
 
 
 def markdown(result):
+    def dump_evidence(items):
+        return ['- ' + ('✅校验通过 ' if e.get('_check', {}).get('ok') else '❌校验不通过 ')
+                + json.dumps({k: v for k, v in e.items() if k != '_check'}, ensure_ascii=False)
+                + ('' if e.get('_check', {}).get('ok') or not e.get('_check', {}).get('reason')
+                   else '　原因：' + e['_check']['reason'])
+                for e in items]
     lines=['# Skill 汇总分析','',result['overview'],'']
     for f in result['findings']:
         check=f.get('validation') or {}
-        lines += ['## '+f['title']+(' 【校验未通过】' if check.get('status')=='failed' else ''),'',
-                  *(['> 程序证据校验未通过（可能是模型引用不实，也可能是校验误判），请人工核对：',
-                     *['> - '+x for x in check.get('errors',[])],''] if check.get('status')=='failed' else []),
-                  f"类别：{f['category']} · 优先级：{f['priority']} · 置信度：{f['confidence']}",'',f['observation'],'',f['recommendation'],'','限制：'+f['limitation'],'','验证：'+f['verification'],'','证据：',*['- '+json.dumps(e,ensure_ascii=False) for e in f['evidence']],'']
+        lines += ['## '+f['title']+(f' 【校验不通过 {check.get("passed",0)}/{check.get("checked",0)}】'
+                                     if check.get('status')=='failed' else ''),'',
+                  *(['> 程序未能在原文中逐字核实部分证据（可能是模型引用不实，也可能是校验误判），',
+                     '> 请人工核对下方标「❌校验不通过」的证据：',''] if check.get('status')=='failed' else []),
+                  f"类别：{f['category']} · 优先级：{f['priority']} · 置信度：{f['confidence']}",'',f['observation'],'',f['recommendation'],'','限制：'+f['limitation'],'','验证：'+f['verification'],'','证据：',*dump_evidence(f['evidence']),'']
         if 'change_kind' in f:
             lines += ['动作：'+f['change_kind']+' · 原因归属：'+f['attribution'],'',
                       '当前核对：'+json.dumps(f['current_check'],ensure_ascii=False),'',
                       '支持会话：'+', '.join(f['supporting_sessions']),'',
                       '回归案例草稿：'+json.dumps(f['regression_case'],ensure_ascii=False),'',
                       '目标：'+json.dumps(f['target'],ensure_ascii=False),'',
-                      '反例：'+json.dumps(f['counter_evidence'],ensure_ascii=False),'']
+                      '反例：'+(json.dumps([{k:v for k,v in e.items() if k!='_check'} for e in f['counter_evidence']],ensure_ascii=False) if f['counter_evidence'] else '无'),'']
     lines+=['## 未覆盖','',*['- '+x for x in result['uncovered']]]
     return '\n'.join(lines)+'\n'
 

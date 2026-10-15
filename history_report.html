@@ -166,6 +166,21 @@ tr.zero td{color:var(--muted)}
 .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 8px;border-radius:5px;background:var(--wash);color:var(--text-secondary);white-space:nowrap}
 .badge.good{color:var(--good-ink)}
 .badge.crit{color:var(--critical)}
+/* ============================ finding cards (AI 汇总分析) ============================ */
+.finding{border:1px solid var(--ring);border-left:4px solid var(--sev-color);border-radius:10px;background:var(--surface-1);margin:14px 0;overflow:hidden}
+.finding-head{display:flex;align-items:flex-start;gap:10px;padding:14px 16px;background:var(--sev-wash)}
+.finding-head .sev-dot{width:10px;height:10px;border-radius:50%;background:var(--sev-color);flex:none;margin-top:4px}
+.finding-head .title{font-size:14px;font-weight:600;color:var(--text-primary);line-height:1.4}
+.finding-head .meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.finding-body{padding:4px 16px 14px}
+.finding-body h4{font-size:12px;font-weight:600;color:var(--text-secondary);margin:14px 0 6px}
+.ev-row{border-top:1px solid var(--grid);padding:9px 0}
+.ev-row:first-child{border-top:0}
+.ev-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap}
+.ev-badge.ok{color:var(--good-ink);background:color-mix(in srgb, var(--good) 14%, transparent)}
+.ev-badge.bad{color:var(--critical);background:color-mix(in srgb, var(--critical) 14%, transparent)}
+.ev-reason{font-size:11.5px;color:var(--critical);margin:4px 0 0}
+.ev-ratio{font-size:11px;color:var(--muted);white-space:nowrap}
 .path{font-size:11px;color:var(--text-secondary);word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .copy{font:inherit;font-size:10px;background:transparent;border:1px solid var(--ring);border-radius:4px;color:var(--muted);padding:1px 5px;cursor:pointer;margin-left:6px}
 .copy:hover{color:var(--text-primary);background:var(--wash)}
@@ -1222,12 +1237,30 @@ function renderLimits(){
 /* ============================================================
    渲染编排
    ============================================================ */
+function evidenceLocation(e){
+  return e.kind==='statistic' ? esc(e.skill)+' · '+esc(e.metric)+' = '+esc(e.value)
+    : e.kind==='history' ? esc(e.session)+' · '+esc(e.event_id)+' · 片段 '+esc(e.part)
+    : esc(e.path)+' · 第 '+esc(e.start)+' 行';
+}
 function analysisEvidenceHTML(rows){
   return (rows||[]).map(function(e){
-    if(e.kind==='statistic')return '<li>'+esc(e.skill)+' · '+esc(e.metric)+' = '+esc(e.value)+'</li>';
-    var location=e.kind==='history' ? e.session+' · '+e.event_id+' · 片段 '+e.part : e.path+' · 第 '+e.start+' 行';
-    return '<li><span class="mono">'+esc(location)+'</span><blockquote style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(e.quote)+'</blockquote></li>';
-  }).join('');
+    var check=e._check, known=check&&typeof check.ok==='boolean';
+    var badge=!known ? '' : check.ok
+      ? '<span class="ev-badge ok">✓ 校验通过</span>'
+      : '<span class="ev-badge bad">✕ 校验不通过</span>';
+    var quote=e.kind==='statistic' ? '' :
+      '<blockquote style="white-space:pre-wrap;overflow-wrap:anywhere;margin:5px 0 0">'+esc(e.quote)+'</blockquote>';
+    var reason=(known&&!check.ok&&check.reason) ? '<p class="ev-reason">未通过原因：'+esc(check.reason)+'</p>' : '';
+    return '<div class="ev-row"><div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">'+
+      '<span class="mono">'+evidenceLocation(e)+'</span>'+badge+'</div>'+quote+reason+'</div>';
+  }).join('') || '<p class="muted" style="padding:9px 0">无</p>';
+}
+/* 严重度：按 category + priority 推导，映射到既有调色 token；不依赖模型额外输出字段。 */
+function severityOf(f){
+  if(f.category==='retire'&&f.priority==='high')return {color:'--critical',wash:'color-mix(in srgb, var(--critical) 7%, transparent)',label:'高风险'};
+  if(['retire','merge','add'].indexOf(f.category)>=0||f.priority==='high')return {color:'--serious',wash:'color-mix(in srgb, var(--serious) 8%, transparent)',label:'待处理'};
+  if(f.category==='improve')return {color:'--warning',wash:'color-mix(in srgb, var(--warning) 10%, transparent)',label:'可改进'};
+  return {color:'--good',wash:'color-mix(in srgb, var(--good) 8%, transparent)',label:'无需改动'};
 }
 function renderAnalysis(){
   var a=D.raw.analysis,host=$('c-analysis');
@@ -1239,27 +1272,38 @@ function renderAnalysis(){
   var states={still_applicable:'当前仍适用',already_fixed:'当前已修复',unavailable:'未核对或不可用'};
   var failedCount=(a.findings||[]).filter(function(f){return f.validation&&f.validation.status==='failed';}).length;
   host.innerHTML='<p>'+esc(a.overview)+'</p><p class="muted">'+esc(a.model||'')+' · '+esc(a.generated_at||'')+' · '+esc(a.status)+' · 不随统计筛选变化</p>'+
-    (failedCount?'<p><span class="badge crit">校验未通过 '+failedCount+' 条</span> 程序未能在原文中逐字核实这些建议引用的证据：可能是模型引用不实，也可能是校验误判，请展开对应建议人工核对。</p>':'')+
+    (failedCount?'<p><span class="badge crit">校验不通过 '+failedCount+' 条结论</span> 程序未能在原文中逐字核实下方部分证据：可能是模型引用不实，也可能是校验误判，请人工核对标「✕ 校验不通过」的证据。</p>':'')+
     ((a.findings||[]).length?'':'<p>本轮未提出改进建议，请结合未覆盖说明阅读。</p>')+
     (a.findings||[]).map(function(f){
-      var caseData=f.regression_case, checks=f.current_check||[], v=f.validation||{};
-      var badge=v.status==='failed'?' <span class="badge crit">校验未通过</span>':v.status==='passed'?' <span class="badge good">证据已核验</span>':'';
-      return '<details style="margin:14px 0;border-top:1px solid var(--line);padding-top:12px"><summary>'+esc(categories[f.category]||f.category)+' · '+esc(f.title)+' · '+esc(f.confidence)+badge+'</summary>'+
-        '<dl class="kv">'+(v.status==='failed'?'<dt>校验结果</dt><dd><p class="muted">程序证据校验未通过，以下为未能核实的原因；结论仍保留供人工判断。</p><ul>'+(v.errors||[]).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul></dd>':'')+'<dt>具体问题</dt><dd>'+esc(f.observation)+'</dd><dt>建议修改</dt><dd>'+esc(f.recommendation)+'</dd>'+
-        (f.change_kind?'<dt>动作 / 原因归属</dt><dd>'+esc(actions[f.change_kind]||f.change_kind)+' / '+esc(causes[f.attribution]||f.attribution)+'</dd>':'')+
-        '<dt>关联Skill</dt><dd>'+(f.skills||[]).map(function(path){
-          var canFocus=D.skills.some(function(x){return x.path===path;});
-          return '<div class="mono">'+esc(path)+(canFocus?' <button class="btn" type="button" data-analysis-skill="'+esc(path)+'">查看读取</button>':'')+'</div>';
-        }).join('')+'</dd>'+
-        (checks.length?'<dt>当前版本核对</dt><dd>'+checks.map(function(x){return '<p>'+esc(x.skill)+' · '+esc(states[x.status]||x.status)+'<br><span class="mono">'+esc(x.sha256||'未绑定正文')+'</span></p>';}).join('')+'</dd>':'')+
-        (f.target?'<dt>候选目标</dt><dd class="mono">'+esc(JSON.stringify(f.target))+'</dd>':'')+
-        '<dt>支持会话</dt><dd>'+(f.supporting_sessions||[]).map(function(key){return '<button class="btn" type="button" data-analysis-session="'+esc(key)+'">'+esc(key)+'</button>';}).join(' ')+
-        (!(f.supporting_sessions||[]).length?'无历史支持会话；不能据此声称验证了实际效果':'')+'</dd>'+
-        '<dt>限制</dt><dd>'+esc(f.limitation)+'</dd><dt>验证方法</dt><dd>'+esc(f.verification)+'</dd></dl>'+
-        (caseData?'<details style="margin:10px 0"><summary>回归案例草稿（尚未运行）</summary><p>任务：'+esc(caseData.task)+'</p><p>预期行为：</p><ul>'+(caseData.expected||[]).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul><p>禁止行为：</p><ul>'+(caseData.forbidden||[]).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul><p>判定方法：'+esc(caseData.verification)+'</p></details>':'')+
-        '<details><summary>支持证据 · '+(f.evidence||[]).length+' 条</summary><ul>'+analysisEvidenceHTML(f.evidence)+'</ul></details>'+
-        '<details><summary>反例证据 · '+(f.counter_evidence||[]).length+' 条</summary><ul>'+analysisEvidenceHTML(f.counter_evidence)+'</ul>'+
-        (!(f.counter_evidence||[]).length?'<p class="muted">本轮未提供反例，不表示不存在反例；检索范围见限制。</p>':'')+'</details></details>';
+      var caseData=f.regression_case, checks=f.current_check||[], v=f.validation||{}, sev=severityOf(f);
+      var ratio=(typeof v.checked==='number'&&v.checked)?'问题依据 '+v.passed+'/'+v.checked+' 校验通过':'';
+      return '<div class="finding" style="--sev-color:var('+sev.color+');--sev-wash:'+sev.wash+'">'+
+        '<div class="finding-head"><span class="sev-dot"></span><div style="flex:1;min-width:0">'+
+          '<div class="title">'+esc(f.title)+'</div>'+
+          '<div class="meta"><span class="pill">'+esc(sev.label)+'</span><span class="pill">'+esc(categories[f.category]||f.category)+'</span>'+
+            '<span class="pill">优先级 '+esc(f.priority)+'</span><span class="pill">置信度 '+esc(f.confidence)+'</span>'+
+            (ratio?'<span class="ev-ratio">'+esc(ratio)+'</span>':'')+'</div></div></div>'+
+        '<div class="finding-body">'+
+          '<h4>具体问题</h4><p>'+esc(f.observation)+'</p>'+
+          '<h4>建议修改</h4><p>'+esc(f.recommendation)+'</p>'+
+          '<h4>问题依据（'+(f.evidence||[]).length+' 条）</h4>'+analysisEvidenceHTML(f.evidence)+
+          '<details style="margin-top:10px"><summary>更多信息</summary>'+
+            '<dl class="kv" style="margin-top:10px">'+
+            (f.change_kind?'<dt>动作 / 原因归属</dt><dd>'+esc(actions[f.change_kind]||f.change_kind)+' / '+esc(causes[f.attribution]||f.attribution)+'</dd>':'')+
+            '<dt>关联Skill</dt><dd>'+(f.skills||[]).map(function(path){
+              var canFocus=D.skills.some(function(x){return x.path===path;});
+              return '<div class="mono">'+esc(path)+(canFocus?' <button class="btn" type="button" data-analysis-skill="'+esc(path)+'">查看读取</button>':'')+'</div>';
+            }).join('')+'</dd>'+
+            (checks.length?'<dt>当前版本核对</dt><dd>'+checks.map(function(x){return '<p>'+esc(x.skill)+' · '+esc(states[x.status]||x.status)+'<br><span class="mono">'+esc(x.sha256||'未绑定正文')+'</span></p>';}).join('')+'</dd>':'')+
+            (f.target?'<dt>候选目标</dt><dd class="mono">'+esc(JSON.stringify(f.target))+'</dd>':'')+
+            '<dt>支持会话</dt><dd>'+(f.supporting_sessions||[]).map(function(key){return '<button class="btn" type="button" data-analysis-session="'+esc(key)+'">'+esc(key)+'</button>';}).join(' ')+
+            (!(f.supporting_sessions||[]).length?'无历史支持会话；不能据此声称验证了实际效果':'')+'</dd>'+
+            '<dt>限制</dt><dd>'+esc(f.limitation)+'</dd><dt>验证方法</dt><dd>'+esc(f.verification)+'</dd></dl>'+
+            (caseData?'<details style="margin:10px 0"><summary>回归案例草稿（尚未运行）</summary><p>任务：'+esc(caseData.task)+'</p><p>预期行为：</p><ul>'+(caseData.expected||[]).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul><p>禁止行为：</p><ul>'+(caseData.forbidden||[]).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul><p>判定方法：'+esc(caseData.verification)+'</p></details>':'')+
+            '<h4>反例证据（'+(f.counter_evidence||[]).length+' 条）</h4>'+analysisEvidenceHTML(f.counter_evidence)+
+            (!(f.counter_evidence||[]).length?'<p class="muted">本轮未提供反例，不表示不存在反例；检索范围见限制。</p>':'')+
+          '</details>'+
+        '</div></div>';
     }).join('')+
     '<p>未覆盖：'+esc((a.uncovered||[]).join('；')||'本轮候选分析无额外缺口')+'</p>';
   host.querySelectorAll('[data-analysis-skill]').forEach(function(button){

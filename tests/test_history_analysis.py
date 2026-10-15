@@ -371,12 +371,17 @@ class AnalysisTests(unittest.TestCase):
         saved=a.read_json(self.root/'analysis.json')
         self.assertEqual([f['title'] for f in saved['findings']],['fixture','bad'])
         self.assertEqual([f['validation']['status'] for f in saved['findings']],['passed','failed'])
-        self.assertIn('证据摘录不匹配',saved['findings'][1]['validation']['errors'][0])
+        self.assertEqual(saved['findings'][0]['validation'],{'checked':1,'passed':1,'status':'passed'})
+        self.assertEqual(saved['findings'][1]['validation'],{'checked':1,'passed':0,'status':'failed'})
+        self.assertFalse(saved['findings'][1]['evidence'][0]['_check']['ok'])
+        self.assertIn('证据摘录不匹配',saved['findings'][1]['evidence'][0]['_check']['reason'])
         self.assertEqual(saved['status'],'partial')
         self.assertTrue(any('已保留并标记「校验未通过」' in x for x in saved['uncovered']))
         self.assertTrue(any('重试用尽' in n for n in saved['coverage']['notes']))
-        self.assertIn('【校验未通过】',(self.root/'analysis.md').read_text())
-        self.assertIn('校验未通过',(self.root/'report.html').read_text())
+        self.assertIn('校验不通过',(self.root/'analysis.md').read_text())
+        # report.html embeds analysis.json verbatim; the badge text itself is rendered by its JS
+        # at view time (covered by tests/test_report_status.cjs), so just check the data is there.
+        self.assertIn('"status": "failed"',(self.root/'report.html').read_text())
     def test_model_cannot_self_certify_validation(self):
         summary=a.make_summary(self.report);f=self.finding(summary)
         f['evidence'][0]['quote']='invented evidence text';f['validation']={'status':'passed'}
@@ -384,6 +389,15 @@ class AnalysisTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'证据摘录不匹配'):a.validate(copy.deepcopy(result),self.report,summary)
         marked=a.validate(result,self.report,summary,mark_invalid=True)
         self.assertEqual(marked['findings'][0]['validation']['status'],'failed')
+    def test_evidence_level_marks_do_not_fail_siblings(self):
+        summary=a.make_summary(self.report);f=self.finding(summary)
+        f['evidence'].append({'kind':'skill','path':str(self.skill),'start':1,'quote':'invented evidence text'})
+        result=self.result();result['findings']=[f]
+        marked=a.validate(result,self.report,summary,mark_invalid=True)
+        checks=[e['_check'] for e in marked['findings'][0]['evidence']]
+        self.assertEqual([c['ok'] for c in checks],[True,False])
+        self.assertIsNone(checks[0]['reason']);self.assertIn('证据摘录不匹配',checks[1]['reason'])
+        self.assertEqual(marked['findings'][0]['validation'],{'checked':2,'passed':1,'status':'failed'})
     def test_unusable_drafts_still_report_unfinished(self):
         stack,run=self.patched(return_value='not json')
         with stack:self.assertEqual(a.run(self.args(),cli),2)

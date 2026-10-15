@@ -60,30 +60,42 @@ if(process.argv[2]){
 
 // New analysis cards remain readable with older artifacts and escape all evidence.
 c.input={sessions:[],extraction:{reads:[]},analysis:{schema_version:'summary-v2',overview:'fixture',status:'partial',uncovered:['limited'],findings:[{
-  category:'improve',title:'rule correction',confidence:'low',observation:'<script>unsafe</script>',recommendation:'clarify rule',
+  category:'improve',title:'rule correction',confidence:'low',priority:'medium',observation:'<script>unsafe</script>',recommendation:'clarify rule',
   skills:[],change_kind:'clarify_boundary',attribution:'skill',
   current_check:[{skill:'/repo/demo/SKILL.md',status:'still_applicable',sha256:'abc'}],
   supporting_sessions:[],counter_evidence:[],target:null,limitation:'bounded evidence',verification:'offline check',
   regression_case:{task:'task',expected:['observable outcome'],forbidden:['bad action'],verification:'compare results'},
-  evidence:[{kind:'history',session:'codex:a',event_id:'a4',part:0,quote:'<img onerror=bad>'}]
+  evidence:[{kind:'history',session:'codex:a',event_id:'a4',part:0,quote:'<img onerror=bad>',_check:{ok:true,reason:null}}],
+  validation:{checked:1,passed:1,status:'passed'}
 }]}};
 vm.runInContext('D=normalize(input);renderAnalysis();',c);
 assert.equal(node('analysis-section').hidden,false);
 const analysisHTML=node('c-analysis').innerHTML;
-for(const text of ['补充适用边界','Skill内容','当前仍适用','回归案例草稿（尚未运行）','支持证据','反例证据'])assert(analysisHTML.includes(text));
+for(const text of ['补充适用边界','Skill内容','当前仍适用','回归案例草稿（尚未运行）','反例证据'])assert(analysisHTML.includes(text),text);
 assert(!analysisHTML.includes('<script>unsafe'));
 assert(analysisHTML.includes('&lt;script&gt;'));
 assert(!analysisHTML.includes('<img onerror=bad>'));
 assert(analysisHTML.includes('&lt;img'));
-assert(!analysisHTML.includes('校验未通过'));
-c.input.analysis.findings[0].validation={status:'failed',errors:['evidence[0] 证据摘录不匹配 <b>x</b>']};
+assert(analysisHTML.includes('校验通过'));
+assert(!analysisHTML.includes('校验不通过'));
+assert(analysisHTML.includes('问题依据 1/1 校验通过'));
+c.input.analysis.findings[0].evidence[0]._check={ok:false,reason:'证据摘录不匹配 <b>x</b>'};
+c.input.analysis.findings[0].validation={checked:1,passed:0,status:'failed'};
 vm.runInContext('renderAnalysis()',c);
 const failedHTML=node('c-analysis').innerHTML;
-for(const text of ['校验未通过 1 条','校验未通过</span>','证据摘录不匹配','&lt;b&gt;x'])assert(failedHTML.includes(text),text);
-c.input.analysis.findings[0].validation={status:'passed'};
+for(const text of ['校验不通过 1 条结论','ev-badge bad','✕ 校验不通过','证据摘录不匹配','&lt;b&gt;x','问题依据 0/1 校验通过'])assert(failedHTML.includes(text),text);
+c.input.analysis.findings[0].evidence[0]._check={ok:true,reason:null};
+c.input.analysis.findings[0].validation={checked:1,passed:1,status:'passed'};
 vm.runInContext('renderAnalysis()',c);
-assert(node('c-analysis').innerHTML.includes('证据已核验'));assert(!node('c-analysis').innerHTML.includes('校验未通过'));
-c.input.analysis={overview:'legacy',status:'complete',findings:[{category:'retain',title:'legacy item',evidence:[]}]};
+assert(node('c-analysis').innerHTML.includes('ev-badge ok'));assert(!node('c-analysis').innerHTML.includes('校验不通过'));
+// Severity colouring is derived from category+priority, highest risk first.
+c.input.analysis.findings[0].category='retire';c.input.analysis.findings[0].priority='high';
+vm.runInContext('renderAnalysis()',c);
+assert(node('c-analysis').innerHTML.includes('var(--critical)'));
+c.input.analysis.findings[0].category='retain';c.input.analysis.findings[0].priority='low';
+vm.runInContext('renderAnalysis()',c);
+assert(node('c-analysis').innerHTML.includes('var(--good)'));
+c.input.analysis={overview:'legacy',status:'complete',findings:[{category:'retain',title:'legacy item',priority:'low',confidence:'low',observation:'o',recommendation:'r',evidence:[]}]};
 vm.runInContext('D=normalize(input);renderAnalysis();',c);
 assert(node('c-analysis').innerHTML.includes('legacy item'));
 delete c.input.analysis;
