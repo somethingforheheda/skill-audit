@@ -103,3 +103,31 @@ vm.runInContext('D=normalize(input);renderAnalysis();',c);
 assert.equal(node('analysis-section').hidden,true);
 assert.equal(node('c-analysis').innerHTML,'');
 console.log('PASS: v2 analysis cards, legacy compatibility, absent analysis and escaped evidence');
+
+// Skill-use review: every related session is listed and transcripts render windowed with load buttons.
+const host=node('c-analysis'),attrs={};
+Object.assign(host,{getAttribute:k=>attrs[k],setAttribute:(k,v)=>{attrs[k]=v},querySelector:()=>null});
+const head={textContent:''},hint={textContent:''};
+node('analysis-section').querySelector=()=>({querySelector:sel=>sel==='h2'?head:hint});
+const txRows=[];for(let i=0;i<40;i++)txRows.push([i===3?'user':i===4?'call':'assistant','m'+i+(i===20?' <b>x</b>':''),i,'2026-10-01T00:00:00Z',0,'',0]);
+c.input.transcripts={'codex:s':txRows};
+c.input.analysis={kind:'skill_review',overview:'ov',coverage:{sessions:1,episodes:1,judged:1},backend:{model:'m'},
+ findings:[{title:'F <i>',type:'skill_gap',severity:'high',confidence:'high',skill:'x',status:'open',observation:'o',root_cause:'r',recommendation:'rec',
+   patch:{after_line:3,text:'+rule'},occurrences:[{episode_id:'e1',session:'codex:s',event:20,user_signal:'不对'}]}],
+ candidates:[{name:'new-skill',title:'t',action:'new',confidence:'medium',steps:['a'],pitfalls:[],evidence:[{session:'codex:s',request:'m3',found:true},{session:'codex:gone',found:false}]}],
+ preferences:[],episodes:[{id:'e1',session:'codex:s',skills:[{name:'x'}],request:'m3',start_event:3,end_event:30,read_events:[4],
+   signals:{score:3,followups:2,corrections:[],interrupts:0,failed_tools:0},judgment:{issues:[{event:20,attribution:'skill_gap',what_happened:'w'}]}}]};
+vm.runInContext('D=normalize(input);renderAnalysis();',c);
+let sr=host.innerHTML;
+for(const text of ['F &lt;i&gt;','1 次 · 1 个会话','第 3 行之后','new-skill','部分引用的会话不在本次报告中','逐次 Skill 使用（1）','不对'])assert(sr.includes(text),text);
+assert.equal(head.textContent,'AI Skill 使用复盘');
+const views=vm.runInContext('SR_VIEWS',c),ids=Object.keys(views);
+assert.equal(ids.length,3);  // finding session, candidate session, episode row
+const box={innerHTML:'',querySelectorAll:()=>[]};
+const findingView=ids.map(k=>views[k]).find(v=>Object.values(v.marks).some(m=>m.label.startsWith('★ 用户：')));
+vm.runInContext('srRender',c)(box,findingView);
+for(const text of ['触发这次 Skill 使用的请求','读取 Skill：x','★ 用户：不对','加载上面10条','加载下面10条','m20 &lt;b&gt;x'])assert(box.innerHTML.includes(text),text);
+assert(!box.innerHTML.includes('>m39<'));
+vm.runInContext('renderAnalysis()',c);
+assert.equal(host.innerHTML,sr);  // re-render after filters keeps opened transcripts
+console.log('PASS: skill review cards list sessions and render windowed transcripts');

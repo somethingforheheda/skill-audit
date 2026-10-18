@@ -24,6 +24,8 @@ APP_FILES = (
     "history_reader.py",
     "history_extract.py",
     "history_analysis.py",
+    "history_episodes.py",
+    "history_skill_review.py",
     "skill_scope.py",
     "history_export.py",
     "history_report.html",

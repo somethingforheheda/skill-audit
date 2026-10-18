@@ -187,6 +187,38 @@ tr.zero td{color:var(--muted)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12px}
 .kv dt{color:var(--muted)}
 .kv dd{margin:0;color:var(--text-secondary);word-break:break-all}
+/* ---------- Skill 使用复盘（episodes） ---------- */
+.sr-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 4px}
+.sr-pane{display:none}.sr-pane.on{display:block}
+.sr-patch{margin-top:8px;border:1px solid color-mix(in srgb,var(--good) 40%,transparent);border-radius:8px;overflow:hidden}
+.sr-patch .ph{font-size:11.5px;padding:4px 10px;background:color-mix(in srgb,var(--good) 12%,transparent);color:var(--good-ink)}
+.sr-pre{margin:0;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.55 ui-monospace,Menlo,monospace}
+.sr-occ{border-top:1px solid var(--grid);padding:8px 0}.sr-occ ul{margin:0;padding-left:18px}
+.sr-sess>summary{cursor:pointer;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:12px;margin-top:4px}
+.sr-sess>summary b{color:var(--s1)}
+.sr-tools{display:flex;gap:14px;align-items:center;font-size:12px;padding:6px 0;position:sticky;top:0;background:var(--surface-1);z-index:1}
+.sr-tx{max-height:75vh;overflow:auto;padding:10px;background:var(--sunk);border-radius:8px;display:flex;flex-direction:column;gap:6px}
+.sr-gap{display:flex;gap:8px;align-items:center;justify-content:center;font-size:11.5px;color:var(--muted)}
+.sr-gap:before,.sr-gap:after{content:"";flex:1;border-top:1px dashed var(--grid)}
+.sr-sess.chat .sr-msg.call,.sr-sess.chat .sr-msg.result,.sr-sess.chat .sr-msg.marker{display:none}
+.sr-mark{font-size:12px;font-weight:600;padding:3px 10px;border-radius:6px;margin-top:4px}
+.sr-mark.read{background:color-mix(in srgb,var(--s1) 16%,transparent);color:var(--s1)}
+.sr-mark.trigger{background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--good-ink)}
+.sr-mark.anchor{background:color-mix(in srgb,var(--critical) 14%,transparent);color:var(--critical)}
+.sr-msg{border-radius:8px;padding:6px 10px;background:var(--surface-1);border:1px solid var(--ring);min-width:0}
+.sr-msg.user{background:color-mix(in srgb,var(--s1) 10%,var(--surface-1));align-self:flex-end;max-width:88%}
+.sr-msg.call,.sr-msg.result,.sr-msg.marker,.sr-msg.skill{background:transparent;border-style:dashed}
+.sr-msg.hit{border:2px solid var(--critical)}.sr-msg.failed{border-color:var(--critical)}
+.sr-msg .h{display:flex;gap:8px;font-size:11.5px;align-items:baseline}.sr-msg .h b{font-weight:600}
+.sr-msg>summary{cursor:pointer;list-style:none}.sr-msg .peek{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sr-msg pre{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.55 ui-monospace,Menlo,monospace;max-height:420px;overflow:auto}
+.sr-ep{border:1px solid var(--ring);border-radius:8px;margin:6px 0}
+.sr-ep>summary{cursor:pointer;padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;font-size:12px}
+.sr-ep .req{flex-basis:100%;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sr-ep .body{padding:0 12px 10px}.sr-iss{border-top:1px dashed var(--grid);padding:6px 0;font-size:12.5px}
+.chip{font-size:10.5px;padding:0 7px;border-radius:999px;background:var(--wash);color:var(--text-secondary)}
+.chip.agent_ignored_skill,.chip.skill_gap{background:color-mix(in srgb,var(--critical) 16%,transparent);color:var(--critical);font-weight:600}
+.chip.agent_general{background:color-mix(in srgb,var(--serious) 18%,transparent)}
 ul.lim{margin:0;padding-left:18px;font-size:12.5px;color:var(--text-secondary)}
 ul.lim li{margin:4px 0}
 .ladder{list-style:none;margin:14px 0 0;padding:0 0 0 20px;position:relative;font-size:12.5px}
@@ -1262,10 +1294,186 @@ function severityOf(f){
   if(f.category==='improve')return {color:'--warning',wash:'color-mix(in srgb, var(--warning) 10%, transparent)',label:'可改进'};
   return {color:'--good',wash:'color-mix(in srgb, var(--good) 8%, transparent)',label:'无需改动'};
 }
+/* ============================================================
+   Skill 使用复盘（analysis.kind === 'skill_review'）
+   结论 → 全部相关会话；聊天记录只展开 Skill 读取与问题处前后，可上下各加载 10 条
+   ============================================================ */
+var SR_TYPE={agent_ignored_skill:'AI 没按 Skill 做',skill_gap:'Skill 缺内容/写错',cross_cutting:'跨 Skill 的共性问题',
+  agent_general:'AI 自身问题',user_change:'需求变化',environment:'环境问题',unclear:'不确定'};
+var SR_LEVEL={high:'高',medium:'中',low:'低'};
+var SR_LABEL={user:'🧑 用户',assistant:'🤖 AI',call:'🔧 工具调用',result:'📤 工具返回',skill:'📘 Skill 注入',marker:'⏹'};
+var SR_VIEWS={};
+function srRows(key){ return (D.raw.transcripts||{})[key]||[]; }
+function srIndex(key, ev, user){
+  var rows=srRows(key), first=-1;
+  for(var i=0;i<rows.length;i++){
+    if(rows[i][2]>=ev){ if(first<0)first=i; if(rows[i][2]>ev)break; if(!user||rows[i][0]==='user')return i; }
+  }
+  return first<0?rows.length-1:first;
+}
+function srView(key, episodes, anchors){
+  var id='srv'+Object.keys(SR_VIEWS).length, marks={}, ranges=[];
+  (episodes||[]).forEach(function(e){
+    var t=srIndex(key,e.start_event,true), names=(e.skills||[]).map(function(k){return k.name;}).join('、');
+    (e.read_events||[]).forEach(function(ev){ var r=srIndex(key,ev,false); marks[r]={kind:'read',label:'📘 读取 Skill：'+names}; ranges.push([r-2,r+4]); });
+    if(!marks[t])marks[t]={kind:'trigger',label:'▶ 触发这次 Skill 使用的请求'};
+    ranges.push([t-2,t+3]);
+  });
+  (anchors||[]).forEach(function(a){ var i=a.index!=null?a.index:srIndex(key,a.event,true); marks[i]={kind:'anchor',label:a.label}; ranges.push([i-6,i+3]); });
+  if(!ranges.length)ranges.push([0,10]);
+  SR_VIEWS[id]={session:key,ranges:ranges,marks:marks};
+  var rows=srRows(key), when=rows.length?fmtMin(ts(rows[0][3])):'';
+  return '<details class="sr-sess" data-view="'+id+'"><summary><b>展开聊天记录</b><span class="mono">'+esc(key)+'</span>'+
+    '<span class="muted">'+esc(when)+' · '+rows.length+' 条</span></summary>'+
+    '<div class="sr-tools"><label><input type="checkbox" class="sr-chat"> 只看对话</label><button class="btn sr-all" type="button">展开全部</button></div>'+
+    '<div class="sr-tx"></div></details>';
+}
+function srMerge(r){
+  r=r.map(function(x){return x.slice();}).sort(function(a,b){return a[0]-b[0];});var o=[];
+  r.forEach(function(x){var l=o[o.length-1];if(l&&x[0]<=l[1]+1)l[1]=Math.max(l[1],x[1]);else o.push(x);});return o;
+}
+function srMsg(it, mark){
+  var kind=it[0],text=it[1],ev=it[2],failed=it[4],tool=it[5],full=it[6],h='';
+  if(mark)h+='<div class="sr-mark '+mark.kind+'">'+esc(mark.label)+'</div>';
+  var head='<span class="h"><b>'+(SR_LABEL[kind]||esc(kind))+(tool?' · '+esc(tool):'')+'</b><span class="muted">'+esc(fmtMin(ts(it[3])))+' · #'+ev+(failed?' · 失败':'')+'</span></span>';
+  var foot=full?'<div class="muted" style="font-size:11px">已截断，原文 '+full+' 字</div>':'';
+  var cls='sr-msg '+kind+(failed?' failed':'')+(mark&&mark.kind==='anchor'?' hit':'');
+  if((kind==='call'||kind==='result')&&!mark)
+    return h+'<details class="'+cls+'"><summary>'+head+'<span class="peek">'+esc(text.trim().split('\n')[0].slice(0,110))+'</span></summary><pre>'+esc(text)+'</pre>'+foot+'</details>';
+  return h+'<div class="'+cls+'">'+head+'<pre>'+esc(text)+'</pre>'+foot+'</div>';
+}
+function srRender(box, v){
+  var items=srRows(v.session), n=items.length, h='', prev=-1;
+  v.ranges=srMerge(v.ranges.map(function(r){return [Math.max(0,r[0]),Math.min(n-1,r[1])];}).filter(function(r){return r[0]<=r[1];}));
+  v.ranges.forEach(function(r,k){
+    var hidden=r[0]-prev-1;
+    if(hidden>0)h+='<div class="sr-gap">'+(k?'<button class="btn sr-more" type="button" data-k="'+(k-1)+'" data-d="down">▼ 加载下面10条</button>':'')+
+      '<span>省略 '+hidden+' 条</span><button class="btn sr-more" type="button" data-k="'+k+'" data-d="up">▲ 加载上面10条</button></div>';
+    for(var i=r[0];i<=r[1];i++)h+=srMsg(items[i],v.marks[i]);
+    prev=r[1];
+  });
+  if(prev<n-1)h+='<div class="sr-gap"><button class="btn sr-more" type="button" data-k="'+(v.ranges.length-1)+'" data-d="down">▼ 加载下面10条</button><span>后面还有 '+(n-1-prev)+' 条</span></div>';
+  box.innerHTML=h;
+  box.querySelectorAll('.sr-more').forEach(function(b){ b.onclick=function(){
+    var r=v.ranges[+b.getAttribute('data-k')];
+    if(b.getAttribute('data-d')==='up')r[0]=Math.max(0,r[0]-10);else r[1]=Math.min(n-1,r[1]+10);
+    srRender(box,v);
+  };});
+}
+function srBind(host){
+  host.querySelectorAll('details.sr-sess').forEach(function(d){ d.addEventListener('toggle',function(){
+    if(!d.open||d.getAttribute('data-done'))return; d.setAttribute('data-done','1');
+    var v=SR_VIEWS[d.getAttribute('data-view')], box=d.querySelector('.sr-tx'); srRender(box,v);
+    var first=box.querySelector('.sr-mark.anchor')||box.querySelector('.sr-mark.read');
+    if(first)box.scrollTop=first.offsetTop-box.offsetTop-30;
+    d.querySelector('.sr-chat').onchange=function(e){d.classList.toggle('chat',e.target.checked);};
+    d.querySelector('.sr-all').onclick=function(){v.ranges=[[0,srRows(v.session).length-1]];srRender(box,v);};
+  });});
+  host.querySelectorAll('.sr-tabs .btn').forEach(function(b){ b.onclick=function(){
+    host.querySelectorAll('.sr-tabs .btn').forEach(function(x){x.setAttribute('aria-pressed','false');});
+    host.querySelectorAll('.sr-pane').forEach(function(x){x.classList.remove('on');});
+    b.setAttribute('aria-pressed','true'); host.querySelector('#'+b.getAttribute('data-p')).classList.add('on');
+  };});
+  var only=host.querySelector('#sr-only');
+  if(only)only.onchange=function(){host.querySelectorAll('.sr-ep').forEach(function(e){e.style.display=only.checked&&e.getAttribute('data-n')==='0'?'none':'';});};
+}
+function srCard(color, title, pills, body){
+  return '<div class="finding" style="--sev-color:var('+color+');--sev-wash:color-mix(in srgb, var('+color+') 8%, transparent)">'+
+    '<div class="finding-head"><span class="sev-dot"></span><div style="flex:1;min-width:0"><div class="title">'+title+'</div>'+
+    '<div class="meta">'+pills.map(function(p){return '<span class="pill">'+p+'</span>';}).join('')+'</div></div></div>'+
+    '<div class="finding-body">'+body+'</div></div>';
+}
+function srFinding(f, byId){
+  var groups={}, order=[];
+  (f.occurrences||[]).forEach(function(o){ var k=o.session; if(!groups[k]){groups[k]=[];order.push(k);} groups[k].push(o); });
+  var fixed=f.status==='already_fixed', color=fixed?'--good':{high:'--critical',medium:'--serious',low:'--warning'}[f.severity]||'--warning';
+  var pills=[fixed?'已修复':'严重度 '+esc(SR_LEVEL[f.severity]||'?'),esc(SR_TYPE[f.type]||f.type),esc(f.skill||'多个 Skill'),
+    '置信度 '+esc(SR_LEVEL[f.confidence]||'?'),(f.occurrences||[]).length+' 次 · '+order.length+' 个会话'];
+  var patch=f.patch||{}, body='<h4>发生了什么</h4><p>'+esc(f.observation)+'</p><h4>为什么会这样</h4><p>'+esc(f.root_cause)+'</p>';
+  if(f.skill_quote)body+='<h4>Skill 当前写法</h4><blockquote style="white-space:pre-wrap;margin:5px 0 0">'+esc(f.skill_quote)+'</blockquote>';
+  body+='<h4>建议怎么改</h4><p>'+esc(f.recommendation)+'</p>';
+  if(patch.text)body+='<div class="sr-patch"><div class="ph">＋ '+(patch.after_line?esc(baseName(String(f.skill_path||'SKILL.md')))+' 第 '+esc(patch.after_line)+' 行之后':'建议加入的内容')+'</div><pre class="sr-pre">'+esc(patch.text)+'</pre></div>';
+  body+='<h4>请你核对：相关会话（'+order.length+' 个）</h4>';
+  order.forEach(function(key){
+    var rows=groups[key], eps=[], seen={};
+    rows.forEach(function(o){ var e=byId[o.episode_id]; if(e&&!seen[e.id]){seen[e.id]=1;eps.push(e);} });
+    var anchors=rows.filter(function(o){return typeof o.event==='number';}).map(function(o){
+      return {event:o.event,label:'★ '+(o.user_signal?'用户：'+String(o.user_signal).slice(0,40):'问题发生处')};});
+    body+='<div class="sr-occ"><ul>'+rows.map(function(o){return '<li>'+esc(o.user_signal||'（无用户原话，AI 行为问题）')+' <span class="muted">#'+esc(o.event)+'</span></li>';}).join('')+'</ul>'+srView(key,eps,anchors)+'</div>';
+  });
+  return srCard(color,esc(f.title),pills,body);
+}
+function srEvidence(list){
+  var groups={}, order=[];
+  (list||[]).forEach(function(ev){ if(!ev.found)return; if(!groups[ev.session]){groups[ev.session]=[];order.push(ev.session);} groups[ev.session].push(ev.request); });
+  return order.map(function(key){
+    var rows=srRows(key), anchors=[];
+    groups[key].forEach(function(q){ var needle=String(q||'').trim().slice(0,30);
+      for(var i=0;needle&&i<rows.length;i++)if(rows[i][0]==='user'&&rows[i][1].indexOf(needle)>=0){anchors.push({index:i,label:'★ 用户请求'});break;} });
+    return '<div class="sr-occ"><ul>'+groups[key].map(function(q){return '<li>'+esc(q)+'</li>';}).join('')+'</ul>'+srView(key,[],anchors)+'</div>';
+  }).join('')+((list||[]).some(function(ev){return !ev.found;})?'<p class="muted">部分引用的会话不在本次报告中，无法展示原文。</p>':'');
+}
+function srEpisode(e){
+  var j=e.judgment||{}, issues=j.issues||[], s=e.signals||{}, names=(e.skills||[]).map(function(k){return k.name;}).join('、');
+  var chips=issues.map(function(i){return '<span class="chip '+esc(i.attribution)+'">'+esc(SR_TYPE[i.attribution]||i.attribution)+'</span>';}).join('');
+  var outcome={success:'完成',partial:'部分完成',fail:'失败',unclear:'不确定'}, follow={yes:'按 Skill 做了',partly:'部分按 Skill',no:'没按 Skill',not_applicable:'Skill 不适用'};
+  var detail='<p><b>用户要做：</b>'+esc(j.user_goal)+'<br><b>Skill 作用：</b>'+esc(j.skill_role)+'<br><b>结果：</b>'+esc(outcome[j.outcome]||j.outcome)+' · '+esc(follow[j.followed_skill]||j.followed_skill)+'</p>';
+  issues.forEach(function(i){
+    detail+='<div class="sr-iss"><span class="chip '+esc(i.attribution)+'">'+esc(SR_TYPE[i.attribution]||i.attribution)+'</span> <span class="muted">#'+esc(i.event)+'</span> '+esc(i.what_happened)+
+      (i.user_signal?'<blockquote style="margin:4px 0 0">'+esc(i.user_signal)+'</blockquote>':'')+
+      (i.skill_quote?'<div class="muted">Skill 原句：'+esc(i.skill_quote)+'</div>':'')+(i.fix?'<div class="muted">建议：'+esc(i.fix)+'</div>':'')+'</div>';
+  });
+  if(j.reusable_workflow)detail+='<p class="muted"><b>可复用经验：</b>'+esc(j.reusable_workflow)+'</p>';
+  var anchors=issues.filter(function(i){return typeof i.event==='number';}).map(function(i){return {event:i.event,label:'★ '+(SR_TYPE[i.attribution]||'')};});
+  return '<details class="sr-ep" data-n="'+issues.length+'"><summary><b>'+esc(s.score)+'</b><b>'+esc(names)+'</b>'+chips+
+    '<span class="muted">追问 '+esc(s.followups)+' · 纠正词 '+((s.corrections||[]).length)+' · 中断 '+esc(s.interrupts)+' · 失败工具 '+esc(s.failed_tools)+'</span>'+
+    '<div class="req">'+esc(String(e.request||'').slice(0,160))+'</div></summary><div class="body">'+detail+srView(e.session,[e],anchors)+'</div></details>';
+}
+function renderSkillReview(a, host){
+  SR_VIEWS={};
+  var byId={}; (a.episodes||[]).forEach(function(e){byId[e.id]=e;});
+  var rank={high:0,medium:1,low:2};
+  var open=(a.findings||[]).filter(function(f){return f.status!=='already_fixed';}).sort(function(x,y){
+    return (rank[x.severity]-rank[y.severity])||((y.occurrences||[]).length-(x.occurrences||[]).length);});
+  var fixed=(a.findings||[]).filter(function(f){return f.status==='already_fixed';});
+  var eps=(a.episodes||[]).slice().sort(function(x,y){return (((y.judgment||{}).issues||[]).length-((x.judgment||{}).issues||[]).length)||(y.signals.score-x.signals.score);});
+  var c=a.coverage||{}, b=a.backend||{};
+  var cands=(a.candidates||[]).map(function(x){
+    return srCard('--s1','<span class="mono">'+esc(x.name)+'</span> · '+esc(x.title),
+      [x.action==='merge_into'?'并入 '+esc(x.merge_target):'新建 Skill','置信度 '+esc(SR_LEVEL[x.confidence]||'?')],
+      '<h4>为什么值得沉淀</h4><p>'+esc(x.why)+'</p><h4>触发描述草稿</h4><blockquote style="margin:5px 0 0">'+esc(x.trigger)+'</blockquote>'+
+      '<h4>步骤</h4><ol>'+(x.steps||[]).map(function(t){return '<li>'+esc(t)+'</li>';}).join('')+'</ol>'+
+      '<h4>坑点</h4><ul>'+(x.pitfalls||[]).map(function(t){return '<li>'+esc(t)+'</li>';}).join('')+'</ul>'+
+      '<h4>怎么验证</h4><p>'+esc(x.verification)+'</p><h4>请你核对：出现过的会话</h4>'+srEvidence(x.evidence));
+  }).join('');
+  var prefs=(a.preferences||[]).map(function(p){ return srCard('--s7',esc(p.rule),['建议写入 '+esc(p.where)],srEvidence(p.evidence)); }).join('');
+  function tab(id,label,on){return '<button class="btn" type="button" data-p="'+id+'" aria-pressed="'+(on?'true':'false')+'">'+label+'</button>';}
+  host.innerHTML='<p>'+esc(a.overview)+'</p><p class="muted">'+esc(c.sessions)+' 个会话 · '+esc(c.episodes)+' 次 Skill 使用 · AI 逐段审查 '+esc(c.judged)+' 次'+
+      (c.judge_errors?'（失败 '+esc(c.judge_errors)+'）':'')+' · '+esc((b.models_used||[b.model]).join('、'))+(b.cost_usd!=null?' · 约 $'+esc(b.cost_usd):'')+' · '+esc(a.generated_at||'')+'</p>'+
+    '<p class="muted">⚠️ 本页内嵌会话原文（密钥已替换、系统说明已省略），只在本机查看。结论由 AI 给出，请展开聊天记录自行核对。</p>'+
+    (c.unselected_skills&&c.unselected_skills.length?'<p class="muted">未进入 AI 审查的 Skill：'+esc(c.unselected_skills.join('、'))+'（可调大 --max-episodes）</p>':'')+
+    '<div class="sr-tabs">'+tab('sr1','Skill 问题（'+open.length+'）',1)+tab('sr2','新 Skill 建议（'+(a.candidates||[]).length+'）')+
+      tab('sr3','行为偏好（'+(a.preferences||[]).length+'）')+tab('sr4','逐次 Skill 使用（'+eps.length+'）')+tab('sr5','已修复 / 排除（'+fixed.length+'）')+'</div>'+
+    '<div class="sr-pane on" id="sr1">'+(open.map(function(f){return srFinding(f,byId);}).join('')||'<p class="muted">没有发现与 Skill 相关的问题</p>')+'</div>'+
+    '<div class="sr-pane" id="sr2">'+(cands||'<p class="muted">没有建议</p>')+'</div>'+
+    '<div class="sr-pane" id="sr3"><p class="muted">不属于某个 Skill、但在多个会话里反复要求 AI 的做法。</p>'+prefs+'</div>'+
+    '<div class="sr-pane" id="sr4"><p class="muted">每行是一次 Skill 使用：从触发它的用户请求到之后 6 轮用户发言。左侧数字是脚本按纠正词、中断、失败工具、追问算的优先级分，红色标签是 AI 判定的 Skill 相关问题。</p>'+
+      '<label class="muted"><input type="checkbox" id="sr-only"> 只看有问题的</label>'+eps.map(srEpisode).join('')+'</div>'+
+    '<div class="sr-pane" id="sr5">'+(fixed.map(function(f){return srFinding(f,byId);}).join('')||'<p class="muted">无</p>')+
+      (a.dismissed?'<h4>排除统计</h4><pre class="sr-pre">'+esc(JSON.stringify(a.dismissed,null,1))+'</pre>':'')+'</div>';
+  srBind(host);
+}
 function renderAnalysis(){
   var a=D.raw.analysis,host=$('c-analysis');
   $('analysis-section').hidden=!a;
   if(!a){host.innerHTML='';return;}
+  if(a.kind==='skill_review'){
+    if(host.getAttribute('data-sr')==='1')return;  // filters do not change the review; keep opened transcripts
+    host.setAttribute('data-sr','1');
+    var head=$('analysis-section').querySelector('.sec-head');
+    head.querySelector('h2').textContent='AI Skill 使用复盘';head.querySelector('.hint').textContent='逐次 Skill 使用审查纠正与返工，结论附原始会话';
+    renderSkillReview(a,host);return;
+  }
   var categories={retain:'保留',improve:'改进',merge:'合并候选',retire:'淘汰候选',add:'新增候选'};
   var actions={none:'保留观察',add_example:'补充案例',fix_rule:'修订规则',clarify_boundary:'补充适用边界',improve_trigger:'改进触发描述',update_script:'修改辅助脚本',merge:'合并',retire:'淘汰候选',add:'新增候选'};
   var causes={skill:'Skill内容',agent:'Agent执行',environment:'环境',user_change:'需求变化',unknown:'无法确定'};

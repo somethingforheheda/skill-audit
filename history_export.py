@@ -31,6 +31,8 @@ def render_html(data):
     validate(data)
     # Only presentation fields; do not embed historical bodies or snapshot manifests.
     payload={k:data.get(k) for k in ('schema_version','kind','period','scope','coverage','extraction','analysis')}
+    # Skill-use review embeds the transcripts it cites so a person can check every conclusion.
+    if data.get('transcripts'):payload['transcripts']=data['transcripts']
     payload['sessions']=[{k:s[k] for k in SESSION_FIELDS if k in s} for s in data.get('sessions',[])]
     encoded=json.dumps(payload,ensure_ascii=False).replace('&','\\u0026').replace('<','\\u003c').replace('>','\\u003e').replace('\u2028','\\u2028').replace('\u2029','\\u2029')
     return template().replace('__SKILL_AUDIT_DATA__',encoded)
@@ -50,6 +52,7 @@ def export(data, json_path):
     html_path=path.with_suffix('.html') if path.suffix.lower()=='.json' else Path(str(path)+'.html')
     html_path.parent.mkdir(parents=True,exist_ok=True)
     html_path.write_text(render_html(data),encoding='utf-8')
+    if data.get('transcripts'):html_path.chmod(0o600)
     return html_path
 
 

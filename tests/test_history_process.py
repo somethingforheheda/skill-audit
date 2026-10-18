@@ -84,7 +84,7 @@ while True:time.sleep(1)
              'FIXTURE_LOG':str(log),'FIXTURE_READY':str(child_ready),'FIXTURE_HEARTBEAT':str(heartbeat)}
         report=self.root/'report.json'
         command=[sys.executable,str(ENTRY),'history','--history-home',str(self.root/'history'),
-                 '--project',str(self.root),'--output',str(report),'--timeout','30','--attempts','3']
+                 '--project',str(self.root),'--output',str(report),'--timeout','30','--attempts','3','--method','summary']
         proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env)
         try:
             self.wait_for(lambda:(child_ready.exists() and heartbeat.exists()) or proc.poll() is not None)

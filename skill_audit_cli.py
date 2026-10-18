@@ -28,7 +28,7 @@ from agent_backends.base import AgentTask, AuditError, AuditTimeout, Need, check
 
 
 PYYAML_REQUIREMENT = "PyYAML>=6.0,<7"
-APP_VERSION = "0.14.0"
+APP_VERSION = "0.15.0"
 
 
 AuditCancelled = codex_process.Cancelled
@@ -179,8 +179,25 @@ def cmd_check(args):
     return review_output_check.main(argv)
 
 
-def cmd_history(args):
+def analyze(args):
+    """Skill-use review by default; --method summary keeps the statistics-first analysis."""
     import history_analysis
+    import history_skill_review
+    method = args.method
+    if args.resume:
+        try:
+            kind = json.loads((args.resume.expanduser() / 'manifest.json').read_text(encoding='utf-8')).get('kind')
+        except (OSError, ValueError):
+            kind = None
+        method = 'episodes' if kind == history_skill_review.VERSION else 'summary'
+    if method == 'episodes':
+        if args.rules_file:
+            raise AuditError('--rules-file 只用于 --method summary')
+        return history_skill_review.run(args, sys.modules[__name__])
+    return history_analysis.run(args, sys.modules[__name__])
+
+
+def cmd_history(args):
     if args.collect_only and (args.report or args.prepare_only or args.rules_file):
         raise AuditError('--collect-only 不能与 --report/--prepare-only/--rules-file 同用')
     if args.report and args.resume:
@@ -188,11 +205,11 @@ def cmd_history(args):
     if not args.collect_only and args.resume:
         if args.output or args.rules_file or args.project or args.skills_root or args.state_dir:
             raise AuditError('续跑沿用原范围、条例和目录，不能重新指定这些参数')
-        return history_analysis.run(args,sys.modules[__name__])
+        return analyze(args)
     if args.report:
         if args.output or args.skills_root or args.project or args.all_projects or args.state_dir:
             raise AuditError('--report 沿用原JSON范围和目录，不能再指定 output/project/skills-root/state-dir')
-        return history_analysis.run(args,sys.modules[__name__])
+        return analyze(args)
     import history_export
     label = 'all-projects' if args.all_projects else (args.project or Path.cwd())
     args.report_directory = history_export.report_directory(args.output,label=label)
@@ -204,7 +221,7 @@ def cmd_history(args):
     args.collect_only=collect_only
     if collect_only:return code
     args.report=args.output
-    return history_analysis.run(args,sys.modules[__name__])
+    return analyze(args)
 
 
 def cmd_analysis_read(args):
@@ -576,6 +593,10 @@ def build_parser():
     history.add_argument("--output", type=Path, help="新报告目录（旧 .json 写法自动转同名目录）；已有报告用 --report")
     history.add_argument("--timeout", type=int, default=600, help="主 Agent 单次分析超时秒数")
     history.add_argument("--attempts", type=int, default=2)
+    history.add_argument("--method", choices=("episodes", "summary"), default="episodes",
+                         help="episodes（默认）：逐次 Skill 使用审查纠正/返工并挖掘新 Skill；summary：旧版统计优先汇总")
+    history.add_argument("--max-episodes", type=int, default=60, help="episodes：最多交给 AI 逐段审查的 Skill 使用次数，默认 60")
+    history.add_argument("--workers", type=int, default=4, help="episodes：并行审查数，默认 4")
     add_backend_args(history, delegation=True)
     history.set_defaults(run=cmd_history)
     reports = commands.add_parser("reports", help="列出 ~/.skill-audit/reports 下的报告，按需清理快照")

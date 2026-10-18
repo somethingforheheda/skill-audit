@@ -73,23 +73,29 @@ caffeinate -i skill-audit history --skills-root .agents/skills --limit 30 \
   --backend claude --model "<模型全名>" --subagent-model "<模型全名>" --timeout 1800 --attempts 2
 ```
 
-流程：
+流程（默认 `--method episodes`）：
 
 1. **纯脚本采集**：读取本机 `~/.claude/projects`、`~/.codex`、`~/.comate-engine/store`（`--sources`、`--history-home` 可调）中工作目录为当前项目的最近 N 个会话（`--limit`，默认 20；`--days`/`--from`/`--to` 限时间，`--all-projects` 不限项目），脱敏后存为本地快照，确定性统计每次 Skill 正文读取。`--collect-only` 只做这一步，不需要模型。
-2. **AI 汇总**：一个总控 Agent（可自行派子代理）读统计摘要，通过只读的 `analysis-read` 工具按需取证，输出改进建议：归因、动作类型、当前正文核对、支持/反例证据、回归案例草稿。
-3. **程序校验**（确定性规则，不调用模型）：每条证据必须能在工具返回原文中逐字找到（忽略转义、引号、全半角标点、空白、Markdown 加粗与列表符号差异；页码或事件 ID 写错时按原文自动定位），统计值、会话与 Skill 正文哈希都要对得上。不合格则带着全部错误定向修复，最多 `--attempts` 次；仍不合格的建议**不会删除**：每条证据单独标「校验通过 / 校验不通过」，不通过的列出原因，建议卡片头部显示「N/M 校验通过」，由人工判断（可能是模型引用不实，也可能是校验误判）。能从证据推出的字段（支持会话、未附正文的当前核对）直接纠正，并在该条「限制」中注明。
+2. **切出每次 Skill 使用**（脚本）：从触发读取的那条用户消息开始，到之后 6 轮用户发言为止，算出信号：纠正/否定用语、本轮被中断、工具失败、追问轮数，按信号排序。每个 Skill 至少选一次，再按信号补满 `--max-episodes`（默认 60）。
+3. **AI 逐段审查**（并行 `--workers`，默认 4）：每段连同 AI 当时读到的 Skill 正文交给模型，判断有没有纠正/返工/打断，并归因为「AI 没按 Skill 做」「Skill 缺内容或写错」「AI 自身问题」「需求变化」「环境」，引用事件号、用户原话和 Skill 原句。
+4. **汇总结论**：同一 Skill、同一根因合成一条，核对 Skill 当前正文（已修复的单列），给出插入到第几行之后的补丁草稿；跨 Skill 重复出现的 AI 行为问题单独成条。
+5. **挖掘新 Skill**：从全部会话的用户消息摘要中找 ≥2 个会话重复出现、现有 Skill 未覆盖的工作流，给出 name/触发描述/步骤/坑点/验证草稿；反复要求 AI 的行为偏好建议写进 AGENTS.md 等。
+
+程序只检查引用的片段、会话是否存在，不再逐字校验引文：`report.html` 每条结论下列出全部相关会话，聊天记录默认只展开 Skill 读取与问题发生处前后，可「加载上面/下面 10 条」或展开全部，由人判断结论是否成立。报告内嵌会话原文，权限 0600，只在本机查看。
+
+旧版统计优先汇总仍可用 `--method summary`（`--rules-file`、`--attempts`、`--subagent-model` 只对它生效）。
 
 产出在 `~/.skill-audit/reports/<项目>-<时间>-<随机>/`：`report.json`（采集统计）、`report.html`（离线页面）、`analysis.json`/`analysis.md`（AI 建议）、`snapshots/`（会话正文快照）、`analysis-runs/<运行ID>/`（摘要、提示词、草稿、校验错误）。
 
 - 结果为 partial（AI 声明了覆盖缺口）时退出码 2、终端可能标红，属正常，打开 `report.html` 查看。
-- 出现「未完成分析」时用终端最后一行的 `--resume <工作目录>` 续跑：先按当前规则复核最新草稿，通过则不再请求模型。超时不自动重试。
+- 中断或某阶段失败时用 `--resume <工作目录>` 续跑：已完成的逐段审查和阶段结果直接复用，只补跑缺的部分。
 - 已有采集报告可复用：`--report <report.json>`；`--prepare-only` 只生成摘要和提示词，不请求模型。
 - 频次不代表效果，「确认读取 0 次」也不等于没用过；AI 建议需要人审阅，工具不会修改任何 Skill。
-- 费用参考（Claude Opus 级模型实测）：30 个会话约 $2–4，260 个会话约 $5。260 个会话的快照约 200MB，用 `skill-audit reports` 清理。
+- 费用参考（Opus 级模型实测）：episodes 每段约 $0.2–0.3，174 个会话切出 134 段全审约 $32，汇总+挖掘约 $4；先用 `--prepare-only` 看会切出多少段，再用 `--max-episodes` 控制。summary 方法 30 个会话约 $2–4。260 个会话的快照约 200MB，用 `skill-audit reports` 清理。
 
 ## 隐私与只读
 
-- 被引用的历史片段会进入所选模型服务的上下文，不是纯本地分析；除此之外不上传任何数据。
+- 历史内容会进入所选模型服务的上下文，不是纯本地分析：episodes 方法发送被选中的每段 Skill 使用片段（工具输出截断）和各会话的用户消息摘要（每条截断到 160 字）；summary 方法只发送被引用的片段。除此之外不上传任何数据。
 - 联网只有两处：所选后端访问模型服务，以及 `update`/每日版本提示访问 `api.github.com` 与 GitHub Release 下载地址（只读公开信息，不带任何本地数据）。
 - 快照、报告、草稿含历史对话原文，按 0700/0600 私有权限保存；脱敏只覆盖已知令牌和常见凭据格式，不保证识别全部敏感信息，分享报告前请自查。
 - 只读保证：Codex 用操作系统沙箱 `--sandbox read-only`；Claude Code 只开放 Read/Grep/Glob（history 额外只放行 `analysis-read` 一个命令前缀），以 `--restricted --safe-mode` 隔离用户 hooks、插件、MCP 与 Skill。
@@ -100,7 +106,7 @@ caffeinate -i skill-audit history --skills-root .agents/skills --limit 30 \
 
 ## 开发
 
-- 入口 `skill_audit_cli.py`；后端适配在 `agent_backends/`；历史采集 `history_pipeline.py`、`history_review.py`（来源适配）、`history_extract.py`（读取统计）；AI 汇总与校验 `history_analysis.py`；条例加载 `rulebook.py`。
+- 入口 `skill_audit_cli.py`；后端适配在 `agent_backends/`；历史采集 `history_pipeline.py`、`history_review.py`（来源适配）、`history_extract.py`（读取统计）；Skill 使用片段 `history_episodes.py`、逐段审查/汇总/挖掘 `history_skill_review.py`、旧版汇总与校验 `history_analysis.py`；条例加载 `rulebook.py`。
 - 新增后端：在 `agent_backends/` 加一个模块，声明必备保证、可选能力和认证方式并实现 `ready/run`，命令行选项、doctor 与打包自动包含。
 - 测试：`python3 -m unittest discover -s tests`（临时夹具，不读真实历史、不请求模型）；`node tests/test_report_status.cjs` 检查 HTML 模板。
 - 打包：`python3 build_dist.py` 生成 `dist/skill-audit.pyz` 与 `dist/skill-audit-team.zip`。
@@ -108,6 +114,7 @@ caffeinate -i skill-audit history --skills-root .agents/skills --limit 30 \
 
 ## 版本
 
+- **0.15.0**：`history` 默认改为逐次 Skill 使用审查（`--method episodes`）：脚本切片段打信号，AI 逐段判断纠正/返工并归因，汇总为带补丁草稿的 Skill 问题，另挖掘新 Skill 候选与行为偏好；报告每条结论列出全部相关会话并内嵌可分段加载的聊天记录，校验只拦不存在的引用。旧流程保留为 `--method summary`。
 - **0.14.0**：「AI 汇总分析」改为按结论分块的卡片，颜色表示严重度（红：淘汰且高优先级，橙：待处理，黄：可改进，绿：保留），先给一句话结论再列问题依据；校验精确到每条证据（校验通过 / 校验不通过 + 原因）。`analysis.json` 的 `validation` 改为 `{checked, passed, status}`，旧报告需重新生成才有逐条标注。
 - **0.13.0**：新增 `skill-audit update`（从 GitHub Release 升级，含校验与自检）和每日最多一次的新版本提示。
 - **0.12.0**：网关改为可选配置，不内置任何组织地址；新增受信任网关列表；移除已被 0.9 汇总流程取代的逐会话 AI 复盘遗留代码（`check history`、`history-read`、历史复盘条例 JSON、`--jobs`/`--batch-chars`）及 0.8.12 前旧目录回退。
