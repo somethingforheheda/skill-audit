@@ -109,6 +109,7 @@ skill-audit sync uninstall
 
 - 读取 `~/.claude/projects`、`~/.codex/sessions`、`~/.comate-engine/store`（`--history-home` 可换），只上传服务器上没有或已变化的文件；超过 128 MB 的会话工具本身读不了，直接跳过。
 - 同时上传这些会话里读过的 Skill 目录（全局 Skill 与项目 Skill 都算，只含小文本文件，每个目录最多 200 个），服务器据此核对补丁草稿所针对的当前正文。
+- `sync run` 开头会问服务器有没有更新的发行包（服务器用 `SA_PYZ` 指向的文件，通过 `/api/sync/version` 和 `/download/skill-audit.pyz` 提供）：有就下载，核对 SHA-256 和 `--version`，替换当前安装并重新运行；失败只提示，不影响同步。`--no-update`、环境变量 `SKILL_AUDIT_NO_UPDATE_CHECK=1`、或 `sync.json` 里写 `"auto_update": false` 可关闭。更新来源就是你配置的服务器，用 http 时同网段的人可以篡改传输内容，所以只适合可信内网，或给服务器配 https；服务器上的发行包要在每次发版后换成新版。
 - 身份就是 `--user` 填的 id，没有密码或令牌，只适合在可信内网里使用；传输是否加密取决于服务器地址用 http 还是 https。
 - 上传的是**会话原文**，不做脱敏。只把服务器地址设为你信任的机器。
 
@@ -135,6 +136,7 @@ skill-audit sync uninstall
 
 ## 版本
 
+- **0.17.1**：`sync run` 开头会问服务器有没有更新的发行包，有就下载、核对 SHA-256 和 `--version`、替换当前安装并重新运行，失败只提示不影响同步；`--no-update`、`SKILL_AUDIT_NO_UPDATE_CHECK=1` 或 `sync.json` 里的 `"auto_update": false` 可关闭。服务端新增 `/api/sync/version`，版本号直接从下载用的发行包里读取。
 - **0.17.0**：新增 `sync`（init / run / status / install / uninstall）：把本机 Claude Code、Codex、Comate 的会话历史和会话里读过的 Skill 增量同步到团队服务器，可注册 launchd / cron 定时任务；`history` 新增 `--skills-catalog`，只补充 Skill 当前正文来源、不限制会话读取范围；新增 `server/`（标准库 Web 应用）接收同步、按用户和目录浏览、从已同步会话发起分析并排队、提供报告页。
 - **0.16.0**：Skill 改进建议按 Hermes 的做法收紧：判断、汇总、挖掘三个提示词加入「不要沉淀」的五类情形、教训写法（祈使句加一句原因，不写单号和日期）和建议动作阶梯；每条结论的补丁换成带检查的 `proposal`（原位改写 / 新增脚本 / 拆进参考文件），脚本只打标记不删除（原句找不到、行号越界、路径不安全、含单号或日期、对工具的否定判断等）；环境类问题不留修改建议，失败片段不留可复用流程；报告展示改写前后对照并可复制；修复未能确认 Skill 名的读取导致审查崩溃的问题。审查结果版本为 `episodes-v2`，旧断点不能续跑。
 - **0.15.0**：`history` 默认改为逐次 Skill 使用审查（`--method episodes`）：脚本切片段打信号，AI 逐段判断纠正/返工并归因，汇总为带补丁草稿的 Skill 问题，另挖掘新 Skill 候选与行为偏好；报告每条结论列出全部相关会话并内嵌可分段加载的聊天记录，校验只拦不存在的引用。旧流程保留为 `--method summary`。

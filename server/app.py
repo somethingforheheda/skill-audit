@@ -14,6 +14,7 @@ import jobs  # noqa: E402
 import page_index  # noqa: E402
 import page_users  # noqa: E402
 import pages  # noqa: E402
+import release  # noqa: E402
 import runner  # noqa: E402
 import store  # noqa: E402
 
@@ -133,6 +134,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, 'ok', 'text/plain')
         if path == '/login':
             return self.send(200, pages.login_page())
+        if path == '/api/sync/version':
+            info = release.pyz_info()
+            return self.send_json(200 if info else 404, info or {'error': 'no release configured'})
         if path == '/download/skill-audit.pyz' and config.PYZ and os.path.isfile(config.PYZ):
             return self.send(200, open(config.PYZ, 'rb').read(), 'application/octet-stream',
                              {'Content-Disposition': 'attachment; filename="skill-audit"'})

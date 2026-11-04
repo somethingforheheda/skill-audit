@@ -4,12 +4,15 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import urllib.parse
 from pathlib import Path
 
 import audit_paths
+import self_update
 import sync_scan
+from agent_backends.base import AuditError
 
 USER_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$')
 BATCH = 1500
@@ -84,6 +87,20 @@ class Client:
             time.sleep(2 * (attempt + 1))
         raise SyncError('请求失败：' + str(last))
 
+    def fetch(self, path, limit=self_update.MAX_BYTES):
+        conn = self.cls(self.host, timeout=self.timeout)
+        try:
+            conn.request('GET', path, headers={'X-SA-User': self.user})
+            res = conn.getresponse()
+            data = res.read(limit + 1)
+        except (OSError, http.client.HTTPException) as exc:
+            raise SyncError('%s: %s' % (type(exc).__name__, exc))
+        finally:
+            conn.close()
+        if res.status != 200 or len(data) > limit:
+            raise SyncError('下载失败：HTTP %s' % res.status)
+        return data
+
     def post(self, path, value):
         raw = json.dumps(value, ensure_ascii=False).encode('utf-8')
         return self.request('POST', path, raw)
@@ -128,6 +145,59 @@ def cmd_init(args):
     return 0
 
 
+REEXEC_ENV = 'SKILL_AUDIT_SYNC_UPDATED'
+
+
+def restart(target):
+    os.execv(sys.executable, [sys.executable, str(target)] + sys.argv[1:])
+
+
+def auto_update(args, client, cfg, restart=restart):
+    """Replace this zipapp with the server's newer build; any problem is reported and syncing carries on."""
+    if (getattr(args, 'no_update', False) or cfg.get('auto_update') is False
+            or os.environ.get(self_update.DISABLE_ENV) or os.environ.get(REEXEC_ENV)):
+        return False
+    try:
+        info = client.request('GET', '/api/sync/version')
+    except SyncError:
+        return False
+    latest, digest = info.get('version'), info.get('sha256')
+    import skill_audit_cli
+    current = skill_audit_cli.APP_VERSION
+    if not latest or not digest or not self_update.parse_version(latest) or \
+            self_update.parse_version(latest) <= self_update.parse_version(current):
+        return False
+    tmp = None
+    try:
+        target = self_update.installed_target()
+        data = client.fetch('/download/skill-audit.pyz')
+        fd, name = tempfile.mkstemp(prefix='.skill-audit-update-', dir=str(target.parent))
+        tmp = Path(name)
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data)
+        self_update.verify(tmp, latest, digest)
+        self_update.refresh_rules(target, tmp)
+        tmp.chmod(0o755)
+        os.replace(str(tmp), str(target))
+        tmp = None
+    except (SyncError, AuditError, OSError) as exc:
+        print('自动更新失败，继续用当前版本同步：%s' % exc, file=sys.stderr)
+        return False
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    say(args, '已从服务器更新：%s → %s' % (current, latest))
+    os.environ[REEXEC_ENV] = '1'
+    try:
+        restart(target)
+    except OSError:
+        pass
+    return True
+
+
 def plan(args, client, home):
     files, skipped = sync_scan.scan(home, args.days)
     return client.diff(files), len(files), skipped
@@ -136,6 +206,7 @@ def plan(args, client, home):
 def cmd_run(args):
     cfg = load_config()
     client = Client(cfg['server'], cfg['user'])
+    auto_update(args, client, cfg)
     home = Path(os.path.expanduser(args.history_home)) if args.history_home else Path.home()
     need, total, skipped = plan(args, client, home)
     size = sum(r['size'] for r in need)

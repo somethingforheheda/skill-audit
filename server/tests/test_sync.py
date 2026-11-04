@@ -1,10 +1,14 @@
 import argparse
+import hashlib
+import io
 import json
 import os
 import sys
 import threading
 import time
 import unittest
+import urllib.request
+import zipfile
 from pathlib import Path
 
 import test_web  # noqa: F401  (sets the environment and temp data dir)
@@ -17,6 +21,7 @@ import browse  # noqa: E402
 import config  # noqa: E402
 import jobs  # noqa: E402
 import runner  # noqa: E402
+import self_update  # noqa: E402
 import store  # noqa: E402
 import sync_client  # noqa: E402
 import sync_scan  # noqa: E402
@@ -136,6 +141,94 @@ class SyncTests(unittest.TestCase):
         with self.assertRaises(jobs.JobError):
             runner.create_from_store('erin', {'project': 'nope'})
         self.assertEqual(store.state('erin')['bytes'] > 0, True)
+
+
+def fake_pyz(version):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as archive:
+        archive.writestr('__main__.py', 'import sys\nprint("skill-audit %s")\n' % version)
+        archive.writestr('skill_audit_cli.py', 'APP_VERSION = "%s"\n' % version)
+    return buf.getvalue()
+
+
+class UpdateTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        config.ensure_dirs()
+        cls.server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
+        cls.server.daemon_threads = True
+        cls.url = 'http://127.0.0.1:%d' % cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.environ['SKILL_AUDIT_HOME'] = str(Path(self.tmp.name) / 'audit')
+        os.environ.pop(sync_client.REEXEC_ENV, None)
+        self.addCleanup(os.environ.pop, sync_client.REEXEC_ENV, None)
+        self.served = Path(self.tmp.name) / 'served.pyz'
+        self.installed = Path(self.tmp.name) / 'skill-audit'
+        self.installed.write_bytes(fake_pyz('0.0.1'))
+        patcher = mock.patch.object(config, 'PYZ', str(self.served))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(self_update, 'installed_target', lambda: self.installed)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.client = sync_client.Client(self.url, 'frank')
+        self.args = argparse.Namespace(no_update=False, quiet=True)
+
+    def test_server_reports_and_serves_the_configured_build(self):
+        with self.assertRaises(sync_client.SyncError):
+            self.client.request('GET', '/api/sync/version')
+        data = fake_pyz('9.9.9')
+        self.served.write_bytes(data)
+        info = self.client.request('GET', '/api/sync/version')
+        self.assertEqual(info, {'version': '9.9.9', 'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)})
+        self.assertEqual(self.client.fetch('/download/skill-audit.pyz'), data)
+
+    def test_newer_server_build_replaces_the_install_and_restarts(self):
+        data = fake_pyz('9.9.9')
+        self.served.write_bytes(data)
+        calls = []
+        self.assertTrue(sync_client.auto_update(self.args, self.client, {}, restart=calls.append))
+        self.assertEqual(self.installed.read_bytes(), data)
+        self.assertEqual(calls, [self.installed])
+        self.assertEqual(os.environ.get(sync_client.REEXEC_ENV), '1')
+        self.assertFalse(sync_client.auto_update(self.args, self.client, {}, restart=calls.append))
+        self.assertEqual(len(calls), 1)
+
+    def test_no_update_when_not_newer_or_switched_off(self):
+        self.served.write_bytes(fake_pyz('0.0.1'))
+        self.assertFalse(sync_client.auto_update(self.args, self.client, {}, restart=lambda t: None))
+        self.served.write_bytes(fake_pyz('9.9.9'))
+        for args, cfg in ((argparse.Namespace(no_update=True, quiet=True), {}), (self.args, {'auto_update': False})):
+            self.assertFalse(sync_client.auto_update(args, self.client, cfg, restart=lambda t: None))
+        self.assertEqual(self.installed.read_bytes(), fake_pyz('0.0.1'))
+
+    def test_wrong_checksum_or_broken_download_leaves_the_install_alone(self):
+        before = self.installed.read_bytes()
+        good = fake_pyz('9.9.9')
+        self.served.write_bytes(good)
+        bad = dict(self.client.request('GET', '/api/sync/version'), sha256='0' * 64)
+
+        class Lying(sync_client.Client):
+            def request(self, method, path, *a, **k):
+                return bad if path == '/api/sync/version' else super().request(method, path, *a, **k)
+
+        lying = Lying(self.url, 'frank')
+        self.assertFalse(sync_client.auto_update(self.args, lying, {}, restart=lambda t: self.fail('restarted')))
+        self.assertEqual(self.installed.read_bytes(), before)
+        self.served.write_bytes(b'not a zip')
+        self.assertFalse(sync_client.auto_update(self.args, self.client, {}, restart=lambda t: self.fail('restarted')))
+        self.assertEqual(self.installed.read_bytes(), before)
+        self.assertEqual([p.name for p in Path(self.tmp.name).iterdir() if p.name.startswith('.skill-audit-update-')], [])
 
 
 if __name__ == '__main__':

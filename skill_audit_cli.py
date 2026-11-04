@@ -29,7 +29,7 @@ from agent_backends.base import AgentTask, AuditError, AuditTimeout, Need, check
 
 
 PYYAML_REQUIREMENT = "PyYAML>=6.0,<7"
-APP_VERSION = "0.17.0"
+APP_VERSION = "0.17.1"
 
 
 AuditCancelled = codex_process.Cancelled
@@ -610,6 +610,7 @@ def build_parser():
     sync.add_argument("--yes", action="store_true", help="run：不再确认（定时任务用）")
     sync.add_argument("--dry-run", action="store_true", help="run：只列出将要上传的内容")
     sync.add_argument("--quiet", action="store_true", help="run：不输出进度")
+    sync.add_argument("--no-update", action="store_true", help="run：不检查服务器上的新版本（默认发现新版会自动替换本工具并重新运行）")
     sync.add_argument("--hours", type=int, default=4, help="install：同步间隔小时数，默认 4")
     sync.set_defaults(run=sync_client.cmd_sync)
     reports = commands.add_parser("reports", help="列出 ~/.skill-audit/reports 下的报告，按需清理快照")
