@@ -50,7 +50,7 @@ def make_home(base):
     return home
 
 
-class SyncTests(unittest.TestCase):
+class SyncBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         config.ensure_dirs()
@@ -76,6 +76,8 @@ class SyncTests(unittest.TestCase):
         base.update(extra)
         return argparse.Namespace(**base)
 
+
+class SyncTests(SyncBase):
     def test_scan_and_projects(self):
         found, skipped = sync_scan.scan(self.home)
         self.assertEqual(sorted(r['s'] for r in found), ['claude', 'codex', 'comate'])
@@ -229,6 +231,76 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse(sync_client.auto_update(self.args, self.client, {}, restart=lambda t: self.fail('restarted')))
         self.assertEqual(self.installed.read_bytes(), before)
         self.assertEqual([p.name for p in Path(self.tmp.name).iterdir() if p.name.startswith('.skill-audit-update-')], [])
+
+
+class TtyBuffer(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class ProgressTests(unittest.TestCase):
+    def test_bar_on_a_terminal_shows_percent_and_bytes(self):
+        out = TtyBuffer()
+        bar = sync_client.Progress('上传', 4 * 1048576, size=True, out=out)
+        bar.update(1048576, 'a.jsonl')
+        bar.last = 0
+        bar.update(4 * 1048576)
+        bar.finish()
+        text = out.getvalue()
+        self.assertIn('\r', text)
+        self.assertIn('100%', text)
+        self.assertIn('4.0 MB/4.0 MB', text)
+        self.assertIn('█', text)
+        self.assertTrue(text.endswith('\n'))
+
+    def test_bar_on_a_pipe_prints_sparse_plain_lines(self):
+        out = io.StringIO()
+        bar = sync_client.Progress('读取', 10, out=out)
+        for n in range(1, 11):
+            bar.update(n)
+        self.assertEqual(len(out.getvalue().strip().splitlines()), 1)
+        self.assertIn('100%', out.getvalue())
+        quiet = io.StringIO()
+        sync_client.Progress('x', 1, enabled=False, out=quiet).update(1)
+        self.assertEqual(quiet.getvalue(), '')
+
+    def test_feed_counts_sent_bytes_and_rewinds_on_retry(self):
+        seen = []
+        feed = sync_client.Feed(b'x' * 100, seen.append)
+        feed.read(60)
+        feed.read(60)
+        feed.seek(0)
+        self.assertEqual(sum(seen), 0)
+        feed.read(100)
+        self.assertEqual(sum(seen), 100)
+
+    def test_walk_back_finds_skill_paths_in_linear_time(self):
+        noise = '/' + 'ab/' * 2000000
+        started = time.time()
+        found = sync_scan.skill_paths_in(noise + ' "/tmp/x/SKILL.md" ~/y/SKILL.md')
+        self.assertLess(time.time() - started, 2)
+        self.assertEqual(found, {'/tmp/x/SKILL.md', '~/y/SKILL.md'})
+
+
+class VisibleProgressTests(SyncBase):
+    def test_run_reports_each_phase_and_the_bytes_sent(self):
+        import contextlib
+        sync_client.cmd_init(self.args(user='gina'))
+        out = TtyBuffer()
+        with contextlib.redirect_stdout(out):
+            code = sync_client.cmd_run(self.args(user='gina', quiet=False))
+        text = out.getvalue()
+        self.assertEqual(code, 0)
+        for part in ('读取工作目录', '查找读过的 Skill', '上传', '100%', '完成：会话 3 个成功'):
+            self.assertIn(part, text)
+
+    def test_upload_reports_exactly_the_file_size(self):
+        sync_client.cmd_init(self.args(user='hank'))
+        client = sync_client.Client(self.url, 'hank')
+        row = [r for r in sync_scan.scan(self.home)[0] if r['s'] == 'claude'][0]
+        seen = []
+        client.upload(row, '/w/p', seen.append)
+        self.assertEqual(sum(seen), row['size'])
 
 
 if __name__ == '__main__':

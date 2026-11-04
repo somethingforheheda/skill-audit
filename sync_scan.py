@@ -10,7 +10,6 @@ SKILL_EXT = ('.md', '.txt', '.json', '.yaml', '.yml', '.py', '.sh', '.js', '.ts'
 SKILL_FILE_MAX = 256 * 1024
 SKILL_FILES_MAX = 200
 SKIP_DIRS = {'.git', 'node_modules', '__pycache__', '.venv', 'venv'}
-SKILL_PATH = re.compile(r'(~?/[^\s"\'\\<>|*?]+?/SKILL\.md)')
 
 
 def roots(home):
@@ -73,16 +72,38 @@ def peek_project(source, path, lines=300):
     return ''
 
 
-def skill_dirs_in(paths, home):
+STOP = set(' \t\r\n"\'\\<>|*?,;()[]{}')
+NEEDLE = 'SKILL.md'
+
+
+def skill_paths_in(text):
+    """Absolute or ~/ paths ending in SKILL.md, found by walking back from each occurrence (linear time)."""
+    found, at = set(), text.find(NEEDLE)
+    while at != -1:
+        start = at
+        while start > 0 and text[start - 1] not in STOP and at - start < 400:
+            start -= 1
+        candidate = text[start:at + len(NEEDLE)]
+        if candidate.startswith(('/', '~/')) and candidate.endswith('/' + NEEDLE):
+            found.add(candidate)
+        at = text.find(NEEDLE, at + 1)
+    return found
+
+
+def skill_dirs_in(paths, home, tick=None):
     """Skill directories whose SKILL.md is mentioned in the given session files and still exists here."""
     found = {}
-    for path in paths:
+    for number, path in enumerate(paths, 1):
+        if tick:
+            tick(number, len(paths))
         try:
             with open(path, encoding='utf-8', errors='replace') as handle:
                 text = handle.read()
         except OSError:
             continue
-        for raw in set(SKILL_PATH.findall(text)):
+        if NEEDLE not in text:
+            continue
+        for raw in skill_paths_in(text):
             candidate = Path(os.path.expanduser(raw) if raw.startswith('~') else raw)
             try:
                 if candidate.is_file():

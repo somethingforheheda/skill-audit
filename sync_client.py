@@ -1,8 +1,10 @@
 """Team sync client: upload local AI-session history and the Skills it read to a team server."""
 import http.client
+import io
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -64,7 +66,7 @@ class Client:
     def request(self, method, path, body=None, length=None, ctype='application/json'):
         last = None
         for attempt in range(RETRIES):
-            conn = self.cls(self.host, timeout=self.timeout)
+            conn = self.cls(self.host, timeout=self.timeout, blocksize=65536)
             headers = {'X-SA-User': self.user}
             if body is not None:
                 headers['Content-Type'] = ctype
@@ -116,13 +118,82 @@ class Client:
             need += [chunk[i] for i in reply.get('need', [])]
         return need
 
-    def upload(self, row, project=''):
+    def upload(self, row, project='', on_bytes=None):
         query = urllib.parse.urlencode({'source': row['s'], 'path': row['rel'], 'mt': row['mt'], 'proj': project})
         with open(row['abs'], 'rb') as handle:
-            body = handle.read(row['size'])
-        if len(body) != row['size']:
+            data = handle.read(row['size'])
+        if len(data) != row['size']:
             raise SyncError('文件在读取时发生变化：' + row['abs'])
-        return self.request('PUT', '/api/sync/file?' + query, body, ctype='application/octet-stream')
+        body = Feed(data, on_bytes) if on_bytes else data
+        return self.request('PUT', '/api/sync/file?' + query, body, len(data), ctype='application/octet-stream')
+
+
+class Feed(io.BytesIO):
+    """Request body that reports how many bytes have been handed to the socket; a retry rewinds the count."""
+
+    def __init__(self, data, on_bytes):
+        super().__init__(data)
+        self.on_bytes, self.sent = on_bytes, 0
+
+    def read(self, size=-1):
+        chunk = super().read(size)
+        self.sent += len(chunk)
+        self.on_bytes(len(chunk))
+        return chunk
+
+    def seek(self, pos, whence=0):
+        if pos == 0 and whence == 0 and self.sent:
+            self.on_bytes(-self.sent)
+            self.sent = 0
+        return super().seek(pos, whence)
+
+
+class Progress:
+    """One-line progress bar on a terminal; on a pipe it prints a short line now and then instead."""
+
+    def __init__(self, label, total, size=False, enabled=True, out=None):
+        self.label, self.total, self.size, self.enabled = label, max(total, 1), size, enabled
+        self.out = out or sys.stdout
+        self.tty = self.out.isatty()
+        self.start = self.last = time.time()
+        self.note = ''
+
+    def amount(self, value):
+        return human(value) if self.size else str(value)
+
+    def update(self, done, note=''):
+        if not self.enabled:
+            return
+        now = time.time()
+        finished = done >= self.total
+        if not finished and now - self.last < (0.1 if self.tty else 15):
+            return
+        self.last = now
+        done = max(0, min(done, self.total))
+        ratio = done / self.total
+        elapsed = max(now - self.start, 1e-6)
+        rate = done / elapsed
+        left = (self.total - done) / rate if rate and done else None
+        tail = ''
+        if self.size and done:
+            tail = '  %s/s' % human(rate)
+        if left is not None and not finished:
+            tail += '  剩余 %d:%02d' % divmod(int(left), 60)
+        if self.tty:
+            width = max(10, min(28, shutil.get_terminal_size((100, 20)).columns - 60))
+            filled = int(width * ratio)
+            line = '%s [%s%s] %3d%%  %s/%s%s  %s' % (self.label, '█' * filled, '░' * (width - filled), ratio * 100,
+                                                    self.amount(done), self.amount(self.total), tail, note)
+            cols = shutil.get_terminal_size((100, 20)).columns
+            self.out.write('\r' + line[:cols - 1].ljust(cols - 1))
+        else:
+            self.out.write('%s %3d%%  %s/%s%s\n' % (self.label, ratio * 100, self.amount(done), self.amount(self.total), tail))
+        self.out.flush()
+
+    def finish(self):
+        if self.enabled and self.tty:
+            self.out.write('\n')
+            self.out.flush()
 
 
 def human(size):
@@ -224,25 +295,47 @@ def cmd_run(args):
             return 1
     if not need:
         return 0
+    show = not args.quiet
     projects = {}
-    for r in need:
-        projects[r['abs']] = sync_scan.peek_project(r['s'], r['abs'])
-    skills = skills_phase(args, client, need, home)
-    failed = 0
+    bar = Progress('读取工作目录', len(need), enabled=show)
     for number, r in enumerate(need, 1):
-        try:
-            client.upload(r, projects.get(r['abs'], ''))
-        except SyncError as exc:
-            failed += 1
-            say(args, '\n失败：%s/%s：%s' % (r['s'], r['rel'], exc))
-        say(args, '\r上传 %d/%d' % (number, len(need)), end='')
-    say(args, '')
-    say(args, '完成：会话 %d 个成功、%d 个失败；Skill 文件 %d 个。' % (len(need) - failed, failed, skills))
+        projects[r['abs']] = sync_scan.peek_project(r['s'], r['abs'])
+        bar.update(number)
+    bar.finish()
+    skills = skills_phase(args, client, need, home)
+    failed = done = 0
+    bar = Progress('上传', size, size=True, enabled=show)
+    sent = [0]
+
+    def count(n):
+        sent[0] += n
+        bar.update(sent[0], current[0])
+    current = ['']
+    try:
+        for number, r in enumerate(need, 1):
+            current[0] = '(%d/%d) %s' % (number, len(need), r['rel'].rsplit('/', 1)[-1][:28])
+            try:
+                client.upload(r, projects.get(r['abs'], ''), count)
+                done += 1
+            except SyncError as exc:
+                failed += 1
+                bar.finish()
+                say(args, '失败：%s/%s：%s' % (r['s'], r['rel'], exc))
+            sent[0] = sum(x['size'] for x in need[:number])
+            bar.update(sent[0], current[0])
+    except KeyboardInterrupt:
+        bar.finish()
+        say(args, '已中断：本次已上传 %d 个，下次运行只会传剩下的。' % done)
+        return 130
+    bar.finish()
+    say(args, '完成：会话 %d 个成功、%d 个失败；Skill 文件 %d 个。' % (done, failed, skills))
     return 1 if failed else 0
 
 
 def skills_phase(args, client, need, home):
-    dirs = sync_scan.skill_dirs_in([r['abs'] for r in need], home)
+    bar = Progress('查找读过的 Skill', len(need), enabled=not args.quiet)
+    dirs = sync_scan.skill_dirs_in([r['abs'] for r in need], home, lambda n, total: bar.update(n))
+    bar.finish()
     rows, entries = [], []
     for directory in dirs.values():
         rows += sync_scan.skill_files(directory)

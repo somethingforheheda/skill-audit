@@ -136,6 +136,7 @@ skill-audit sync uninstall
 
 ## 版本
 
+- **0.17.3**：`sync run` 查找会话里读过的 Skill 时不再卡住：旧写法的正则遇到几十 MB 的大会话几乎算不完，改为从每个 `SKILL.md` 出现的位置往回找路径，326 个、共 1 GB 的会话约 5 秒扫完；读取工作目录、查找 Skill、上传三个阶段都有进度条（上传按字节显示百分比、速度、剩余时间和当前文件，非终端时每 15 秒一行），Ctrl-C 干净退出，下次只传剩下的。
 - **0.17.2**：没有功能变化，只升版本号，用来实测 `sync` 从服务器自动更新（0.17.1 → 0.17.2）。
 - **0.17.1**：`sync run` 开头会问服务器有没有更新的发行包，有就下载、核对 SHA-256 和 `--version`、替换当前安装并重新运行，失败只提示不影响同步；`--no-update`、`SKILL_AUDIT_NO_UPDATE_CHECK=1` 或 `sync.json` 里的 `"auto_update": false` 可关闭。服务端新增 `/api/sync/version`，版本号直接从下载用的发行包里读取。
 - **0.17.0**：新增 `sync`（init / run / status / install / uninstall）：把本机 Claude Code、Codex、Comate 的会话历史和会话里读过的 Skill 增量同步到团队服务器，可注册 launchd / cron 定时任务；`history` 新增 `--skills-catalog`，只补充 Skill 当前正文来源、不限制会话读取范围；新增 `server/`（标准库 Web 应用）接收同步、按用户和目录浏览、从已同步会话发起分析并排队、提供报告页。
