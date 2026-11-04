@@ -29,7 +29,7 @@ from agent_backends.base import AgentTask, AuditError, AuditTimeout, Need, check
 
 
 PYYAML_REQUIREMENT = "PyYAML>=6.0,<7"
-APP_VERSION = "0.16.0"
+APP_VERSION = "0.17.0"
 
 
 AuditCancelled = codex_process.Cancelled

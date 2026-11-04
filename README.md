@@ -55,6 +55,7 @@ skill-audit review .agents/skills/example --output r.json   # 单 Skill AI 审�
 skill-audit cross .agents/skills --output c.json        # 跨 Skill 全量审核（只扫 Git 跟踪且无未提交改动的 Skill）
 skill-audit check single r.json --repo-root .           # 复查已有 review/cross 报告的结构与原文定位
 skill-audit history --skills-root .agents/skills --limit 30   # 历史会话复盘，见下节
+skill-audit sync init --server http://主机:端口 --user 邮箱前缀   # 把会话历史同步到团队服务器，见「团队同步」
 skill-audit reports [--prune --keep 5 [--yes] [--all]]  # 列出 / 清理历史报告，默认试运行
 skill-audit probe-agents --backend claude               # 测试后端的原生子代理委派
 skill-audit update [--check]                            # 升级本工具，见上节
@@ -93,9 +94,29 @@ caffeinate -i skill-audit history --skills-root .agents/skills --limit 30 \
 - 频次不代表效果，「确认读取 0 次」也不等于没用过；AI 建议需要人审阅，工具不会修改任何 Skill。
 - 费用参考（Opus 级模型实测）：episodes 每段约 $0.2–0.3，174 个会话切出 134 段全审约 $32，汇总+挖掘约 $4；先用 `--prepare-only` 看会切出多少段，再用 `--max-episodes` 控制。summary 方法 30 个会话约 $2–4。260 个会话的快照约 200MB，用 `skill-audit reports` 清理。
 
+## 团队同步（sync）
+
+让团队成员把本机的 AI 会话历史定期同步到一台自建服务器，在那里集中浏览、分析。不运行 `sync` 就不会上传任何会话。
+
+```bash
+skill-audit sync init --server http://主机:端口 --user 你的邮箱前缀   # 保存到 ~/.skill-audit/sync.json（0600）
+skill-audit sync run --dry-run     # 只列出将要上传的内容
+skill-audit sync run               # 先告诉你传多少、确认后上传；--days N 只传最近 N 天，--yes 不再确认
+skill-audit sync status            # 服务器上已有多少
+skill-audit sync install           # macOS 用 launchd、Linux 用 cron，默认每 4 小时同步一次（--hours 可改）
+skill-audit sync uninstall
+```
+
+- 读取 `~/.claude/projects`、`~/.codex/sessions`、`~/.comate-engine/store`（`--history-home` 可换），只上传服务器上没有或已变化的文件；超过 128 MB 的会话工具本身读不了，直接跳过。
+- 同时上传这些会话里读过的 Skill 目录（全局 Skill 与项目 Skill 都算，只含小文本文件，每个目录最多 200 个），服务器据此核对补丁草稿所针对的当前正文。
+- 身份就是 `--user` 填的 id，没有密码或令牌，只适合在可信内网里使用；传输是否加密取决于服务器地址用 http 还是 https。
+- 上传的是**会话原文**，不做脱敏。只把服务器地址设为你信任的机器。
+
+服务端在 `server/`：纯标准库的 Web 应用（Python 3.9+），收同步、按用户和会话工作目录归类、可从已同步的会话发起 `history` 分析并排队执行、提供报告页。环境变量见 `server/config.py`（`SA_DATA`、`SA_PORT`、`SA_AUDIT_CMD`、`SA_ENV_FILE`、`SA_PYZ` 等）；`python3 server/app.py` 启动，登录层在 `server/auth.py`，默认只校验邮箱前缀格式，接入公司统一登录时替换这一个文件。分析时用 `history --history-home <任务目录> --skills-catalog <该用户的 Skill 目录>`，所以服务器上不需要和用户相同的路径。
+
 ## 隐私与只读
 
-- 历史内容会进入所选模型服务的上下文，不是纯本地分析：episodes 方法发送被选中的每段 Skill 使用片段（工具输出截断）和各会话的用户消息摘要（每条截断到 160 字）；summary 方法只发送被引用的片段。除此之外不上传任何数据。
+- 历史内容会进入所选模型服务的上下文，不是纯本地分析：episodes 方法发送被选中的每段 Skill 使用片段（工具输出截断）和各会话的用户消息摘要（每条截断到 160 字）；summary 方法只发送被引用的片段。除此之外，只有你主动运行 `sync` 时才会把会话文件和读过的 Skill 上传到你配置的服务器。
 - 联网只有两处：所选后端访问模型服务，以及 `update`/每日版本提示访问 `api.github.com` 与 GitHub Release 下载地址（只读公开信息，不带任何本地数据）。
 - 快照、报告、草稿含历史对话原文，按 0700/0600 私有权限保存；脱敏只覆盖已知令牌和常见凭据格式，不保证识别全部敏感信息，分享报告前请自查。
 - 只读保证：Codex 用操作系统沙箱 `--sandbox read-only`；Claude Code 只开放 Read/Grep/Glob（history 额外只放行 `analysis-read` 一个命令前缀），以 `--restricted --safe-mode` 隔离用户 hooks、插件、MCP 与 Skill。
@@ -108,12 +129,13 @@ caffeinate -i skill-audit history --skills-root .agents/skills --limit 30 \
 
 - 入口 `skill_audit_cli.py`；后端适配在 `agent_backends/`；历史采集 `history_pipeline.py`、`history_review.py`（来源适配）、`history_extract.py`（读取统计）；Skill 使用片段 `history_episodes.py`、逐段审查/汇总/挖掘 `history_skill_review.py`、旧版汇总与校验 `history_analysis.py`；条例加载 `rulebook.py`。
 - 新增后端：在 `agent_backends/` 加一个模块，声明必备保证、可选能力和认证方式并实现 `ready/run`，命令行选项、doctor 与打包自动包含。
-- 测试：`python3 -m unittest discover -s tests`（临时夹具，不读真实历史、不请求模型）；`node tests/test_report_status.cjs` 检查 HTML 模板。
+- 测试：`python3 -m unittest discover -s tests`（临时夹具，不读真实历史、不请求模型）；`node tests/test_report_status.cjs` 检查 HTML 模板。服务端测试：`cd server && python3 -m unittest discover -s tests`（用假的分析命令，不请求模型）。
 - 打包：`python3 build_dist.py` 生成 `dist/skill-audit.pyz` 与 `dist/skill-audit-team.zip`。
 - 发版：改 `skill_audit_cli.py` 的 `APP_VERSION` 和下方版本记录，推送后在 GitHub 建 tag `vX.Y.Z` 的 Release，并上传 `skill-audit.pyz`（文件名固定，`update` 按名字找）与 `skill-audit-team.zip`。
 
 ## 版本
 
+- **0.17.0**：新增 `sync`（init / run / status / install / uninstall）：把本机 Claude Code、Codex、Comate 的会话历史和会话里读过的 Skill 增量同步到团队服务器，可注册 launchd / cron 定时任务；`history` 新增 `--skills-catalog`，只补充 Skill 当前正文来源、不限制会话读取范围；新增 `server/`（标准库 Web 应用）接收同步、按用户和目录浏览、从已同步会话发起分析并排队、提供报告页。
 - **0.16.0**：Skill 改进建议按 Hermes 的做法收紧：判断、汇总、挖掘三个提示词加入「不要沉淀」的五类情形、教训写法（祈使句加一句原因，不写单号和日期）和建议动作阶梯；每条结论的补丁换成带检查的 `proposal`（原位改写 / 新增脚本 / 拆进参考文件），脚本只打标记不删除（原句找不到、行号越界、路径不安全、含单号或日期、对工具的否定判断等）；环境类问题不留修改建议，失败片段不留可复用流程；报告展示改写前后对照并可复制；修复未能确认 Skill 名的读取导致审查崩溃的问题。审查结果版本为 `episodes-v2`，旧断点不能续跑。
 - **0.15.0**：`history` 默认改为逐次 Skill 使用审查（`--method episodes`）：脚本切片段打信号，AI 逐段判断纠正/返工并归因，汇总为带补丁草稿的 Skill 问题，另挖掘新 Skill 候选与行为偏好；报告每条结论列出全部相关会话并内嵌可分段加载的聊天记录，校验只拦不存在的引用。旧流程保留为 `--method summary`。
 - **0.14.0**：「AI 汇总分析」改为按结论分块的卡片，颜色表示严重度（红：淘汰且高优先级，橙：待处理，黄：可改进，绿：保留），先给一句话结论再列问题依据；校验精确到每条证据（校验通过 / 校验不通过 + 原因）。`analysis.json` 的 `validation` 改为 `{checked, passed, status}`，旧报告需重新生成才有逐条标注。
