@@ -25,6 +25,7 @@ APP_FILES = (
     "history_extract.py",
     "history_analysis.py",
     "history_episodes.py",
+    "history_lessons.py",
     "history_skill_review.py",
     "skill_scope.py",
     "history_export.py",

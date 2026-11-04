@@ -189,7 +189,7 @@ def analyze(args):
             kind = json.loads((args.resume.expanduser() / 'manifest.json').read_text(encoding='utf-8')).get('kind')
         except (OSError, ValueError):
             kind = None
-        method = 'episodes' if kind == history_skill_review.VERSION else 'summary'
+        method = 'episodes' if str(kind).startswith('episodes-') else 'summary'
     if method == 'episodes':
         if args.rules_file:
             raise AuditError('--rules-file 只用于 --method summary')

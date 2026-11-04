@@ -219,10 +219,14 @@ def build(key, events, reads):
         read_items = [i for i, _, _ in g['reads']]
         skills = {}
         for _, _, row in g['reads']:
+            if not (row['skill'] or row['name']):
+                continue  # an unconfirmed read that never resolved to a Skill cannot be reviewed
             entry = skills.setdefault(row['skill'] or row['name'], {'name': row['name'], 'path': row['skill'],
                                                                     'reads': 0, 'statuses': []})
             entry['reads'] += 1
             entry['statuses'].append(row['status'])
+        if not skills:
+            continue
         episodes.append({
             'id': h.digest(key + ':' + trigger['event_id']), 'session': key,
             'request': trigger['text'][:600], 'start_event': trigger['event'], 'end_event': items[g['end']]['event'],

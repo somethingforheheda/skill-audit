@@ -113,13 +113,13 @@ const txRows=[];for(let i=0;i<40;i++)txRows.push([i===3?'user':i===4?'call':'ass
 c.input.transcripts={'codex:s':txRows};
 c.input.analysis={kind:'skill_review',overview:'ov',coverage:{sessions:1,episodes:1,judged:1},backend:{model:'m'},
  findings:[{title:'F <i>',type:'skill_gap',severity:'high',confidence:'high',skill:'x',status:'open',observation:'o',root_cause:'r',recommendation:'rec',
-   patch:{after_line:3,text:'+rule'},occurrences:[{episode_id:'e1',session:'codex:s',event:20,user_signal:'不对'}]}],
+   proposal:{action:'in_place_patch',target_file:'SKILL.md',old_string:null,new_string:'+rule <b>',after_line:3,draft_content:null,pointer:null,flags:[{code:'dated',message:'含日期 <x>'}]},occurrences:[{episode_id:'e1',session:'codex:s',event:20,user_signal:'不对'}]}],
  candidates:[{name:'new-skill',title:'t',action:'new',confidence:'medium',steps:['a'],pitfalls:[],evidence:[{session:'codex:s',request:'m3',found:true},{session:'codex:gone',found:false}]}],
  preferences:[],episodes:[{id:'e1',session:'codex:s',skills:[{name:'x'}],request:'m3',start_event:3,end_event:30,read_events:[4],
    signals:{score:3,followups:2,corrections:[],interrupts:0,failed_tools:0},judgment:{issues:[{event:20,attribution:'skill_gap',what_happened:'w'}]}}]};
 vm.runInContext('D=normalize(input);renderAnalysis();',c);
 let sr=host.innerHTML;
-for(const text of ['F &lt;i&gt;','1 次 · 1 个会话','第 3 行之后','new-skill','部分引用的会话不在本次报告中','逐次 Skill 使用（1）','不对'])assert(sr.includes(text),text);
+for(const text of ['F &lt;i&gt;','1 次 · 1 个会话','第 3 行之后加入','+rule &lt;b&gt;','含日期 &lt;x&gt;','data-copy="+rule &lt;b&gt;"','new-skill','部分引用的会话不在本次报告中','逐次 Skill 使用（1）','不对'])assert(sr.includes(text),text);
 assert.equal(head.textContent,'AI Skill 使用复盘');
 const views=vm.runInContext('SR_VIEWS',c),ids=Object.keys(views);
 assert.equal(ids.length,3);  // finding session, candidate session, episode row

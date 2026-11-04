@@ -67,6 +67,13 @@ class EpisodeTests(unittest.TestCase):
         failed = [x['event'] for x in items if x['kind'] == 'result' and x['failed']]
         self.assertEqual(failed, [6])
 
+    def test_unconfirmed_read_without_a_skill_name_makes_no_episode(self):
+        unnamed = {**read(3), 'skill': None, 'name': None, 'status': 'unconfirmed'}
+        episodes, _ = ep.build('codex:s', self.session(), [unnamed])
+        self.assertEqual(episodes, [])
+        episodes, _ = ep.build('codex:s', self.session(), [read(3), {**unnamed, 'read_id': 'r9'}])
+        self.assertEqual([k['name'] for k in episodes[0]['skills']], ['repo-workflow'])
+
     def test_episode_signals(self):
         episodes, _ = ep.build('codex:s', self.session(), [read(3)])
         self.assertEqual(len(episodes), 1)

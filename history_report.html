@@ -193,6 +193,9 @@ tr.zero td{color:var(--muted)}
 .sr-patch{margin-top:8px;border:1px solid color-mix(in srgb,var(--good) 40%,transparent);border-radius:8px;overflow:hidden}
 .sr-patch .ph{font-size:11.5px;padding:4px 10px;background:color-mix(in srgb,var(--good) 12%,transparent);color:var(--good-ink)}
 .sr-pre{margin:0;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.55 ui-monospace,Menlo,monospace}
+.sr-del{background:color-mix(in srgb,var(--critical) 10%,transparent)}
+.sr-add{background:color-mix(in srgb,var(--good) 10%,transparent)}
+.sr-flag{display:inline-block;margin:4px 6px 0 0;padding:1px 8px;border-radius:10px;font-size:11px;background:color-mix(in srgb,var(--warning) 22%,transparent)}
 .sr-occ{border-top:1px solid var(--grid);padding:8px 0}.sr-occ ul{margin:0;padding-left:18px}
 .sr-sess>summary{cursor:pointer;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:12px;margin-top:4px}
 .sr-sess>summary b{color:var(--s1)}
@@ -1383,16 +1386,33 @@ function srCard(color, title, pills, body){
     '<div class="meta">'+pills.map(function(p){return '<span class="pill">'+p+'</span>';}).join('')+'</div></div></div>'+
     '<div class="finding-body">'+body+'</div></div>';
 }
+function srFlags(list){
+  return (list||[]).map(function(x){return '<span class="sr-flag" title="'+esc(x.code)+'">'+esc(x.message)+'</span>';}).join('');
+}
+function srProposal(p,f){
+  if(!p||typeof p!=='object')return '';
+  var file=p.target_file||'SKILL.md', copy=p.new_string||p.draft_content||'', head, inner;
+  if(p.action==='in_place_patch'){
+    var shown=file==='SKILL.md'&&f.skill_path?baseName(String(f.skill_path)):file;
+    head=p.old_string?esc(shown)+' 中改写一句':esc(shown)+(p.after_line?' 第 '+esc(p.after_line)+' 行之后加入':' 加入');
+    inner=(p.old_string?'<pre class="sr-pre sr-del">－ '+esc(p.old_string)+'</pre>':'')+'<pre class="sr-pre sr-add">＋ '+esc(p.new_string)+'</pre>';
+  }else{
+    head=(p.action==='add_script'?'新增脚本 ':'新增参考文件 ')+esc(file);
+    inner='<pre class="sr-pre sr-add">'+esc(p.draft_content)+'</pre>'+(p.pointer?'<div class="ph">SKILL.md 里加一行指引</div><pre class="sr-pre">'+esc(p.pointer)+'</pre>':'');
+  }
+  var flags=srFlags(p.flags);
+  return '<div class="sr-patch"><div class="ph">'+head+'<button class="copy" type="button" data-copy="'+esc(copy)+'">复制</button></div>'+inner+(flags?'<div style="padding:0 10px 8px">'+flags+'</div>':'')+'</div>';
+}
 function srFinding(f, byId){
   var groups={}, order=[];
   (f.occurrences||[]).forEach(function(o){ var k=o.session; if(!groups[k]){groups[k]=[];order.push(k);} groups[k].push(o); });
   var fixed=f.status==='already_fixed', color=fixed?'--good':{high:'--critical',medium:'--serious',low:'--warning'}[f.severity]||'--warning';
   var pills=[fixed?'已修复':'严重度 '+esc(SR_LEVEL[f.severity]||'?'),esc(SR_TYPE[f.type]||f.type),esc(f.skill||'多个 Skill'),
     '置信度 '+esc(SR_LEVEL[f.confidence]||'?'),(f.occurrences||[]).length+' 次 · '+order.length+' 个会话'];
-  var patch=f.patch||{}, body='<h4>发生了什么</h4><p>'+esc(f.observation)+'</p><h4>为什么会这样</h4><p>'+esc(f.root_cause)+'</p>';
+  var body='<h4>发生了什么</h4><p>'+esc(f.observation)+'</p><h4>为什么会这样</h4><p>'+esc(f.root_cause)+'</p>';
   if(f.skill_quote)body+='<h4>Skill 当前写法</h4><blockquote style="white-space:pre-wrap;margin:5px 0 0">'+esc(f.skill_quote)+'</blockquote>';
   body+='<h4>建议怎么改</h4><p>'+esc(f.recommendation)+'</p>';
-  if(patch.text)body+='<div class="sr-patch"><div class="ph">＋ '+(patch.after_line?esc(baseName(String(f.skill_path||'SKILL.md')))+' 第 '+esc(patch.after_line)+' 行之后':'建议加入的内容')+'</div><pre class="sr-pre">'+esc(patch.text)+'</pre></div>';
+  body+=srProposal(f.proposal,f);
   body+='<h4>请你核对：相关会话（'+order.length+' 个）</h4>';
   order.forEach(function(key){
     var rows=groups[key], eps=[], seen={};
@@ -1441,7 +1461,8 @@ function renderSkillReview(a, host){
   var cands=(a.candidates||[]).map(function(x){
     return srCard('--s1','<span class="mono">'+esc(x.name)+'</span> · '+esc(x.title),
       [x.action==='merge_into'?'并入 '+esc(x.merge_target):'新建 Skill','置信度 '+esc(SR_LEVEL[x.confidence]||'?')],
-      '<h4>为什么值得沉淀</h4><p>'+esc(x.why)+'</p><h4>触发描述草稿</h4><blockquote style="margin:5px 0 0">'+esc(x.trigger)+'</blockquote>'+
+      '<h4>为什么值得沉淀</h4><p>'+esc(x.why)+'</p>'+(srFlags(x.flags)?'<p>'+srFlags(x.flags)+'</p>':'')+'<h4>触发描述草稿</h4><blockquote style="margin:5px 0 0">'+esc(x.trigger)+'</blockquote>'+
+      ((x.prerequisites||[]).length?'<h4>前置条件</h4><ul>'+x.prerequisites.map(function(t){return '<li>'+esc(t)+'</li>';}).join('')+'</ul>':'')+
       '<h4>步骤</h4><ol>'+(x.steps||[]).map(function(t){return '<li>'+esc(t)+'</li>';}).join('')+'</ol>'+
       '<h4>坑点</h4><ul>'+(x.pitfalls||[]).map(function(t){return '<li>'+esc(t)+'</li>';}).join('')+'</ul>'+
       '<h4>怎么验证</h4><p>'+esc(x.verification)+'</p><h4>请你核对：出现过的会话</h4>'+srEvidence(x.evidence));
