@@ -23,6 +23,7 @@ import audit_paths
 import audit_config as cfg
 import agent_backends
 import self_update
+import sync_client
 # AuditTimeout is re-exported: history_analysis reaches backend errors through this module.
 from agent_backends.base import AgentTask, AuditError, AuditTimeout, Need, check_models  # noqa: F401
 
@@ -580,6 +581,7 @@ def build_parser():
     history.add_argument("--to", dest="date_to", help="本地日期 YYYY-MM-DD，含当天")
     history.add_argument("--skills-root", action="append", type=Path, default=None, help="仅分析此 Skill 目录及子目录，可重复；相对路径基于 project 或当前目录")
     history.add_argument("--sources", default="codex,claude,comate")
+    history.add_argument("--skills-catalog", action="append", type=Path, default=None, help="额外的 Skill 目录，只用来读取 Skill 当前正文，不限制会话读取范围（会话来自别的机器时用）")
     history.add_argument("--history-home", type=Path, default=Path.home(), help="包含 .codex/.claude/.comate-engine 的用户目录")
     history.add_argument("--exclude-session", action="append", default=[], help="排除会话 ID，可重复指定；自动排除 CODEX_THREAD_ID")
     history.add_argument("--limit", "--max-sessions", dest="limit", type=int, default=20, help="按最后活动时间选择最近 N 个会话，默认 20")
@@ -599,6 +601,17 @@ def build_parser():
     history.add_argument("--workers", type=int, default=4, help="episodes：并行审查数，默认 4")
     add_backend_args(history, delegation=True)
     history.set_defaults(run=cmd_history)
+    sync = commands.add_parser("sync", help="把本机的 AI 会话历史和读过的 Skill 同步到团队服务器（init/run/status/install/uninstall）")
+    sync.add_argument("action", choices=sorted(sync_client.ACTIONS))
+    sync.add_argument("--server", help="init：服务器地址，如 http://主机:端口")
+    sync.add_argument("--user", help="init：你的邮箱前缀，服务器按它归类")
+    sync.add_argument("--days", type=int, help="run：只同步最近 N 天修改过的会话；省略则同步全部")
+    sync.add_argument("--history-home", help="run：包含 .claude/.codex/.comate-engine 的用户目录，默认当前用户目录")
+    sync.add_argument("--yes", action="store_true", help="run：不再确认（定时任务用）")
+    sync.add_argument("--dry-run", action="store_true", help="run：只列出将要上传的内容")
+    sync.add_argument("--quiet", action="store_true", help="run：不输出进度")
+    sync.add_argument("--hours", type=int, default=4, help="install：同步间隔小时数，默认 4")
+    sync.set_defaults(run=sync_client.cmd_sync)
     reports = commands.add_parser("reports", help="列出 ~/.skill-audit/reports 下的报告，按需清理快照")
     reports.add_argument("--path", action="store_true", help="只打印报告根目录，便于 open $(skill-audit reports --path)")
     reports.add_argument("--prune", action="store_true", help="标记超出 --keep 的报告；默认试运行，不删除")

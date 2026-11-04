@@ -140,7 +140,8 @@ def collect(args, secrets=()):
     return {'schema_version':'1.1','kind':'history_evidence',
             'period':{'from':start.isoformat(),'to_exclusive':end.isoformat(),'timezone':str(datetime.now().astimezone().tzinfo)},
             'scope':{'project':str(project) if project else None,'sources':sources,'excluded_sessions':sorted(excluded),
-                     'skills_roots':allowed_roots,'limit':args.limit,'selection':'latest_activity','days':args.days},
+                     'skills_roots':allowed_roots,'catalog_roots':[str(Path(p).expanduser().resolve()) for p in getattr(args,'skills_catalog',None) or []],
+                     'limit':args.limit,'selection':'latest_activity','days':args.days},
             'coverage':{'sources':source_status,'uncovered':problems,'sessions_discovered':len(discovered),
                         'sessions_outside_limit':max(0,len(discovered)-len(sessions))},'sessions':sessions}
 

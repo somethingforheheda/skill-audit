@@ -26,6 +26,8 @@ APP_FILES = (
     "history_analysis.py",
     "history_episodes.py",
     "history_lessons.py",
+    "sync_client.py",
+    "sync_scan.py",
     "history_skill_review.py",
     "skill_scope.py",
     "history_export.py",

@@ -185,7 +185,8 @@ def judge_all(selected, items, cli, backend, plan, state, args, control):
 
 def skill_catalog(report, episodes):
     paths = {k['path'] for e in episodes for k in e['skills'] if k.get('path')}
-    for root in report.get('scope', {}).get('skills_roots') or []:
+    scope = report.get('scope', {})
+    for root in (scope.get('skills_roots') or []) + (scope.get('catalog_roots') or []):
         if Path(root).is_dir():
             paths |= {str(p.absolute()) for p in Path(root).rglob('SKILL.md') if p.is_file()}
     catalog = []
