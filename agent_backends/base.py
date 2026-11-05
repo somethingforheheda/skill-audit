@@ -55,6 +55,7 @@ class Selection:
     auth: str = None
     model: str = None
     subagent_model: str = None
+    effort: str = None                # thinking effort; only backends that support it accept it
     allow_any_gateway: bool = False   # bypass the optional trusted-gateway list
 
 

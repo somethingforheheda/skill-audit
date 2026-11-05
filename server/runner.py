@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -13,23 +14,84 @@ import jobs
 KEEP_ENV = ('ANTHROPIC_', 'CLAUDE_CODE_', 'OPENAI_', 'CODEX_')
 
 
+def need_model(meta):
+    if not (meta.get('model') or config.MODEL):
+        raise jobs.JobError('请先选择或填写模型名（服务器没有默认模型）', 400)
+
+
 def start(jid, user):
     meta = jobs.owned(jid, user)
     if meta['status'] != 'uploading':
         raise jobs.JobError('任务已提交', 409)
     if not meta['files']:
         raise jobs.JobError('还没有上传任何会话文件', 400)
+    need_model(meta)
     return jobs.update(jid, status='queued', message='排队中', queued=int(time.time()))
+
+
+RUNNING = {}
+CANCELLED = set()
+KEYS = {}
+KEY_RE = re.compile(r'^[\x21-\x7e]{8,400}$')
+
+
+def key_required():
+    return config.USER_KEY == 'required' and config.KEY_VAR not in load_env()
+
+
+def pop_key(options):
+    key = str(options.pop('api_key', '') or '').strip()
+    if key and not KEY_RE.match(key):
+        raise jobs.JobError('API Key 格式不对：长度 8–400，不能含空格或中文', 400)
+    if not key and key_required():
+        raise jobs.JobError('请先填写你的 API Key', 400)
+    return key
+
+
+def keep_key(jid, key):
+    if key:
+        with jobs.LOCK:
+            KEYS[jid] = key
+
+
+def new_job(user, options):
+    key = pop_key(options)
+    meta = jobs.create(user, options)
+    keep_key(meta['id'], key)
+    return meta
+
+
+def cancel(jid, user):
+    jobs.owned(jid, user)
+    with jobs.LOCK:
+        meta = jobs.get(jid)
+        if meta['status'] == 'queued':
+            meta.update(status='cancelled', message='已取消', finished=int(time.time()))
+            jobs.save(meta)
+            KEYS.pop(jid, None)
+            shutil.rmtree(str(jobs.job_dir(jid) / 'home'), ignore_errors=True)
+            return meta
+        if meta['status'] != 'running':
+            raise jobs.JobError('任务不在排队或运行中', 409)
+        CANCELLED.add(jid)
+        proc = RUNNING.get(jid)
+    if proc is not None:
+        _stop(proc)
+    return jobs.get(jid)
 
 
 def delete(jid, user):
     meta = jobs.owned(jid, user)
     if meta['status'] == 'running':
         raise jobs.JobError('任务正在运行，结束后才能删除', 409)
+    KEYS.pop(jid, None)
     shutil.rmtree(str(jobs.job_dir(jid)), ignore_errors=True)
 
 
 def create_from_store(user, options):
+    key = pop_key(options)
+    jobs.clean_options(options)
+    need_model({'model': options.get('model')})
     meta = jobs.create(user, options)
     jid = meta['id']
     project = str(options.get('project') or '*')[:200]
@@ -38,6 +100,7 @@ def create_from_store(user, options):
     if not count:
         shutil.rmtree(str(jobs.job_dir(jid)), ignore_errors=True)
         raise jobs.JobError('没有符合条件的已同步会话', 400)
+    keep_key(jid, key)
     catalog = browse.skills_dir(user)
     return jobs.update(jid, status='queued', message='排队中', queued=int(time.time()), sources=sources,
                        files=count, bytes=size, project=project, days=days or 0,
@@ -82,11 +145,15 @@ def prepare_home(extra):
         json.dump({'env': {k: v for k, v in extra.items() if k.startswith('ANTHROPIC_')}}, handle)
 
 
-def build_env():
+def build_env(key=''):
     extra = load_env()
+    if key:
+        extra.pop(config.KEY_VAR, None)
     prepare_home(extra)
     env = dict(os.environ)
     env.update(extra)
+    if key:
+        env[config.KEY_VAR] = key
     env['HOME'] = str(config.RUNNER_HOME)
     env['PYTHONUNBUFFERED'] = '1'
     if config.EXTRA_PATH:
@@ -101,10 +168,14 @@ def build_command(meta, out):
                                     '--limit', str(meta['limit']), '--max-episodes', str(meta['max_episodes']),
                                     '--workers', str(config.WORKERS), '--backend', config.BACKEND,
                                     '--output', str(out)]
-    if config.MODEL:
-        cmd += ['--model', config.MODEL]
-    if config.SUBAGENT_MODEL:
-        cmd += ['--subagent-model', config.SUBAGENT_MODEL]
+    model = meta.get('model') or config.MODEL
+    if model:
+        cmd += ['--model', model]
+    sub = meta.get('subagent_model') or (config.SUBAGENT_MODEL if not meta.get('model') else '')
+    if sub:
+        cmd += ['--subagent-model', sub]
+    if meta.get('effort'):
+        cmd += ['--effort', meta['effort']]
     if meta.get('catalog'):
         cmd += ['--skills-catalog', meta['catalog']]
     return cmd
@@ -113,28 +184,55 @@ def build_command(meta, out):
 def _stop(proc):
     try:
         os.killpg(proc.pid, signal.SIGTERM)
-        time.sleep(3)
+    except OSError:
+        return
+    for _ in range(30):
+        if proc.poll() is not None:
+            return
+        time.sleep(0.1)
+    try:
         os.killpg(proc.pid, signal.SIGKILL)
     except OSError:
         pass
 
 
+def claim(jid):
+    with jobs.LOCK:
+        meta = jobs.get(jid)
+        if not meta or meta['status'] != 'queued':
+            return None
+        meta.update(status='running', message='分析中', started=int(time.time()))
+        jobs.save(meta)
+        return meta
+
+
 def run_job(jid):
-    meta = jobs.update(jid, status='running', message='分析中', started=int(time.time()))
+    meta = claim(jid)
+    if not meta:
+        return
     out = report_dir(jid)
     problem = ''
+    with jobs.LOCK:
+        key = KEYS.pop(jid, '')
     try:
+        if not key and key_required():
+            raise RuntimeError('API Key 已丢失（服务重启过），请重新提交')
         cmd = build_command(meta, out)
         with open(str(jobs.job_dir(jid) / 'run.log'), 'wb') as log:
             proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(jobs.job_dir(jid)),
-                                    env=build_env(), start_new_session=True)
+                                    env=build_env(key), start_new_session=True)
+            with jobs.LOCK:
+                RUNNING[jid] = proc
+                asked = jid in CANCELLED
+            if asked:
+                _stop(proc)
             deadline = time.time() + config.JOB_TIMEOUT
             while proc.poll() is None:
                 if time.time() > deadline:
                     _stop(proc)
                     problem = '超过 %d 分钟，已终止' % (config.JOB_TIMEOUT // 60)
                     break
-                time.sleep(2)
+                time.sleep(1)
             code = proc.wait()
         if not problem and code != 0:
             problem = '分析进程退出码 %s' % code
@@ -142,9 +240,15 @@ def run_job(jid):
             problem = '没有生成报告'
     except Exception as exc:
         problem = '启动失败：%s' % exc
+    with jobs.LOCK:
+        RUNNING.pop(jid, None)
+        cancelled = jid in CANCELLED
+        CANCELLED.discard(jid)
     if not config.KEEP_UPLOADS:
         shutil.rmtree(str(jobs.job_dir(jid) / 'home'), ignore_errors=True)
-    if problem:
+    if cancelled:
+        jobs.update(jid, status='cancelled', message='已取消', finished=int(time.time()))
+    elif problem:
         tail = tail_log(jid, 3).replace('\n', ' | ')
         jobs.update(jid, status='failed', message=(problem + '：' + tail)[:400], finished=int(time.time()))
     else:

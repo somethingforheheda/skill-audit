@@ -70,6 +70,8 @@ def build_command(binary, task, plan):
         command += ['--add-dir', str(root)]
     if plan.model:
         command += ['--model', plan.model]
+    if plan.selection.effort:
+        command += ['--effort', plan.selection.effort]
     return command
 
 

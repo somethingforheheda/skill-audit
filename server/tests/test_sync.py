@@ -250,7 +250,7 @@ class ProgressTests(unittest.TestCase):
         self.assertIn('\r', text)
         self.assertIn('100%', text)
         self.assertIn('4.0 MB/4.0 MB', text)
-        self.assertIn('█', text)
+        self.assertIn('[=', text)
         self.assertTrue(text.endswith('\n'))
 
     def test_bar_on_a_pipe_prints_sparse_plain_lines(self):
@@ -263,6 +263,23 @@ class ProgressTests(unittest.TestCase):
         quiet = io.StringIO()
         sync_client.Progress('x', 1, enabled=False, out=quiet).update(1)
         self.assertEqual(quiet.getvalue(), '')
+
+    def test_every_frame_fits_one_row_even_with_wide_characters(self):
+        import unittest.mock as mock
+        for columns in (40, 80, 100, 160):
+            out = TtyBuffer()
+            bar = sync_client.Progress('查找读过的 Skill', 1 << 30, size=True, out=out)
+            with mock.patch.object(sync_client.shutil, 'get_terminal_size', return_value=os.terminal_size((columns, 24))):
+                for step in range(1, 11):
+                    bar.last = 0
+                    bar.update(step * (100 << 20), '(%d/326) 中文文件名-很长很长很长很长很长.jsonl' % step)
+            frames = [f for f in out.getvalue().split('\r') if f]
+            self.assertEqual(len(frames), 10)
+            for frame in frames:
+                text = frame.replace('\x1b[K', '')
+                self.assertNotIn('\n', text)
+                self.assertLessEqual(sum(sync_client.cells(c) for c in text), columns - 2, (columns, text))
+        self.assertEqual(sync_client.fit('上传ab', 5), '上传a')
 
     def test_feed_counts_sent_bytes_and_rewinds_on_retry(self):
         seen = []

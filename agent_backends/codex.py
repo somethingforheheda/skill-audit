@@ -162,6 +162,8 @@ class CodexBackend(Backend):
     default_auth = 'gateway'
 
     def plan(self, selection, needs):
+        if selection.effort:
+            raise AuditError('codex 后端暂不支持 --effort；请去掉该参数，或改用 --backend claude-code')
         # Without an explicit --auth: a configured gateway wins, otherwise reuse codex login.
         auth = AUTH_ALIASES.get(selection.auth, selection.auth) or ('gateway' if load_optional().get('base_url') else 'native')
         return super().plan(replace(selection, auth=auth), needs)

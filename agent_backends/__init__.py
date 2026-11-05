@@ -61,6 +61,6 @@ def selection(args, **defaults):
     """Build a Selection from argparse-style args; missing attributes fall back to defaults."""
     value = lambda key: getattr(args, key, None) or defaults.get(key)
     return Selection(backend=value('backend'), auth=value('auth'), model=value('model'),
-                     subagent_model=value('subagent_model'),
+                     subagent_model=value('subagent_model'), effort=value('effort'),
                      # Checkpoints from 0.11 saved the flag under its old name.
                      allow_any_gateway=bool(value('allow_any_gateway') or defaults.get('allow_non_company')))

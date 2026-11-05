@@ -29,7 +29,7 @@ from agent_backends.base import AgentTask, AuditError, AuditTimeout, Need, check
 
 
 PYYAML_REQUIREMENT = "PyYAML>=6.0,<7"
-APP_VERSION = "0.17.3"
+APP_VERSION = "0.17.4"
 
 
 AuditCancelled = codex_process.Cancelled
@@ -510,6 +510,9 @@ def add_backend_args(command, delegation=False, model=True):
     command.add_argument("--auth", help="认证方式（codex: gateway/native，默认已配置网关时 gateway、否则 native；claude-code: native）")
     if model:
         command.add_argument("--model", help="主模型；省略时用 init 为该后端保存的模型")
+    if model:
+        command.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"),
+                             help="思考强度（仅 claude-code 后端支持）；省略则用 Claude Code 默认")
     if delegation:
         command.add_argument("--subagent-model", help="子代理模型；省略时用配置值，再省略则同主模型")
     command.add_argument("--allow-any-gateway", action="store_true",

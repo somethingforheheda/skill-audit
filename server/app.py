@@ -22,7 +22,8 @@ HTML = 'text/html; charset=utf-8'
 
 
 def public(meta):
-    keys = ('id', 'user', 'created', 'status', 'message', 'files', 'bytes', 'limit')
+    keys = ('id', 'user', 'created', 'status', 'message', 'files', 'bytes', 'limit', 'model', 'subagent_model',
+            'effort', 'project', 'days', 'max_episodes')
     return {k: meta.get(k) for k in keys}
 
 
@@ -150,6 +151,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, page_users.users_page(user, self.headers.get('Host') or 'SERVER:8200'))
         if path.startswith('/u/') and auth.valid_name(path[3:]):
             return self.send(200, page_users.user_page(user, path[3:]))
+        if path == '/api/config':
+            return self.send_json(200, {'models': config.MODELS, 'default_model': config.MODEL,
+                                        'efforts': list(config.EFFORTS), 'max_episodes': config.MAX_EPISODES,
+                                        'key_required': runner.key_required()})
         if path == '/api/users':
             return self.send_json(200, {'me': user, 'users': browse.list_users()})
         if path.startswith('/api/users/') and auth.valid_name(path[11:]):
@@ -211,11 +216,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/jobs':
                 raw = self.read_body()
                 options = json.loads(raw.decode('utf-8')) if raw else {}
-                return self.send_json(200, public(jobs.create(user, options if isinstance(options, dict) else {})))
+                return self.send_json(200, public(runner.new_job(user, options if isinstance(options, dict) else {})))
             parts = path.split('/')
             if len(parts) == 5 and parts[1] == 'api' and parts[2] == 'jobs':
                 if parts[4] == 'start':
                     return self.send_json(200, public(runner.start(parts[3], user)))
+                if parts[4] == 'cancel':
+                    return self.send_json(200, public(runner.cancel(parts[3], user)))
                 if parts[4] == 'delete':
                     runner.delete(parts[3], user)
                     return self.send_json(200, {'ok': True})

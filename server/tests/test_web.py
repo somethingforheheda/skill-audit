@@ -11,7 +11,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 TMP = tempfile.mkdtemp(prefix='sa-web-')
 os.environ.update(SA_DATA=TMP, SA_AUDIT_CMD='%s %s' % (sys.executable, os.path.join(HERE, 'stub_audit.py')),
-                  SA_MIN_FREE_GB='0', SA_MAX_FILE_MB='1', SA_JOB_TIMEOUT='60')
+                  SA_MIN_FREE_GB='0', SA_MAX_FILE_MB='1', SA_JOB_TIMEOUT='60', SA_MODEL='default-model')
 sys.path.insert(0, os.path.dirname(HERE))
 
 import app  # noqa: E402
@@ -66,7 +66,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(res.status, 302)
         res, data = self.call('GET', '/', cookie=self.login())
         self.assertEqual(res.status, 200)
-        self.assertIn('上传历史会话'.encode(), data)
+        self.assertIn('分析任务'.encode(), data)
 
     def test_api_needs_header_and_login(self):
         cookie = self.login()
@@ -134,6 +134,101 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.api('POST', '/api/jobs/%s/delete' % jid, self.login('bob'))[0], 403)
         self.assertEqual(self.api('POST', '/api/jobs/%s/delete' % jid, cookie)[0], 200)
         self.assertIsNone(jobs.get(jid))
+
+    def test_model_and_effort_are_validated_and_passed_to_the_command(self):
+        cookie = self.login()
+        for bad in ({'model': '--evil'}, {'model': 'a b'}, {'subagent_model': 'x;y'}, {'effort': 'extreme'}):
+            self.assertEqual(self.api('POST', '/api/jobs', cookie, json.dumps(bad))[0], 400, bad)
+        status, data = self.api('POST', '/api/jobs', cookie, json.dumps(
+            {'model': 'my-model[1m]', 'subagent_model': 'sub-model', 'effort': 'high'}))
+        self.assertEqual(status, 200)
+        jid = json.loads(data)['id']
+        self.put(cookie, jid, 'p/s.jsonl')
+        self.assertEqual(self.api('POST', '/api/jobs/%s/start' % jid, cookie)[0], 200)
+        self.assertEqual(self.wait(cookie, jid)['status'], 'done')
+        text = self.call('GET', '/r/%s/report.html' % jid, cookie=cookie)[1].decode()
+        for part in ('--model', 'my-model[1m]', '--subagent-model', 'sub-model', '--effort', 'high'):
+            self.assertIn(part, text)
+        jid = self.make_job(cookie)
+        self.put(cookie, jid, 'p/s.jsonl')
+        self.api('POST', '/api/jobs/%s/start' % jid, cookie)
+        self.wait(cookie, jid)
+        text = self.call('GET', '/r/%s/report.html' % jid, cookie=cookie)[1].decode()
+        self.assertIn('default-model', text)
+        self.assertNotIn('--effort', text)
+
+    def test_a_model_is_required_when_the_server_has_no_default(self):
+        from unittest import mock
+        cookie = self.login()
+        jid = self.make_job(cookie)
+        self.put(cookie, jid, 'p/s.jsonl')
+        with mock.patch.object(config, 'MODEL', ''):
+            status, data = self.api('POST', '/api/jobs/%s/start' % jid, cookie)
+        self.assertEqual(status, 400)
+        self.assertIn('模型', data.decode())
+
+    def test_user_key_reaches_the_process_but_is_never_stored(self):
+        from unittest import mock
+        cookie = self.login()
+        secret = 'sk-test-' + 'k' * 20
+        with mock.patch.object(config, 'USER_KEY', 'required'):
+            self.assertEqual(json.loads(self.api('GET', '/api/config', cookie)[1])['key_required'], True)
+            self.assertEqual(self.api('POST', '/api/jobs', cookie, json.dumps({}))[0], 400)
+            self.assertEqual(self.api('POST', '/api/jobs', cookie, json.dumps({'api_key': 'bad key 1'}))[0], 400)
+            status, data = self.api('POST', '/api/jobs', cookie, json.dumps({'api_key': secret}))
+            self.assertEqual(status, 200)
+            self.assertNotIn(secret, data.decode())
+            jid = json.loads(data)['id']
+            self.put(cookie, jid, 'p/s.jsonl')
+            self.assertEqual(self.api('POST', '/api/jobs/%s/start' % jid, cookie)[0], 200)
+            self.assertEqual(self.wait(cookie, jid)['status'], 'done')
+        text = self.call('GET', '/r/%s/report.html' % jid, cookie=cookie)[1].decode()
+        self.assertIn('TOKEN=' + secret, text)
+        self.assertNotIn(jid, runner.KEYS)
+        for root, _, names in os.walk(str(config.DATA)):
+            for name in names:
+                if name != 'report.html':
+                    with open(os.path.join(root, name), 'rb') as handle:
+                        self.assertNotIn(secret.encode(), handle.read(), name)
+
+    def test_cancel_stops_a_running_job_and_removes_a_queued_one(self):
+        cookie, other = self.login(), self.login('bob')
+        os.environ['STUB_SLEEP'] = '60'
+        ids = []
+        try:
+            workers = sum(1 for t in threading.enumerate() if t.name == 'job-worker')
+            for _ in range(workers + 1):
+                jid = self.make_job(cookie)
+                self.put(cookie, jid, 'p/s.jsonl')
+                self.api('POST', '/api/jobs/%s/start' % jid, cookie)
+                ids.append(jid)
+            for _ in range(50):
+                if any(json.loads(self.api('GET', '/api/jobs/' + j, cookie)[1])['status'] == 'running' for j in ids):
+                    break
+                time.sleep(0.2)
+            time.sleep(1.5)
+            state = {j: json.loads(self.api('GET', '/api/jobs/' + j, cookie)[1])['status'] for j in ids}
+            running = [j for j in ids if state[j] == 'running']
+            queued = [j for j in ids if state[j] == 'queued']
+            self.assertTrue(running and queued, state)
+            self.assertEqual(self.api('POST', '/api/jobs/%s/cancel' % running[0], other)[0], 403)
+            status, data = self.api('POST', '/api/jobs/%s/cancel' % queued[0], cookie)
+            self.assertEqual((status, json.loads(data)['status']), (200, 'cancelled'))
+            self.assertFalse(os.path.exists(os.path.join(config.JOBS, queued[0], 'home')))
+            started = time.time()
+            self.assertEqual(self.api('POST', '/api/jobs/%s/cancel' % running[0], cookie)[0], 200)
+            row = self.wait(cookie, running[0], ('cancelled', 'done', 'failed'))
+            self.assertEqual(row['status'], 'cancelled', row)
+            self.assertLess(time.time() - started, 15)
+            self.assertEqual(self.api('POST', '/api/jobs/%s/cancel' % running[0], cookie)[0], 409)
+            self.assertEqual(self.api('POST', '/api/jobs/%s/delete' % running[0], cookie)[0], 200)
+        finally:
+            for jid in ids:
+                self.api('POST', '/api/jobs/%s/cancel' % jid, cookie)
+            for jid in ids:
+                if os.path.isdir(os.path.join(config.JOBS, jid)):
+                    self.wait(cookie, jid, ('cancelled', 'done', 'failed'))
+            del os.environ['STUB_SLEEP']
 
     def test_failed_job_reports_reason(self):
         cookie = self.login()

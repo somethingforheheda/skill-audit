@@ -1,16 +1,15 @@
-from pages import shell
+from pages import OPTS_HTML, OPTS_JS, esc, shell
 
 INDEX_SCRIPT = '''
-const $=s=>document.getElementById(s);
 const MAXMB=%(maxmb)d;
 const SRC={
   claude:f=>f.name.endsWith('.jsonl'),
   codex:f=>f.name.endsWith('.jsonl'),
   comate:f=>f.name.startsWith('chat_session_')&&!f.name.endsWith('.deleted')};
 function picked(){
-  const since=Date.now()-(+$('days').value||14)*864e5, out=[];
+  const since=Date.now()-(+gid('days').value||14)*864e5, out=[];
   for(const s of Object.keys(SRC)){
-    for(const f of $('in-'+s).files||[]){
+    for(const f of gid('in-'+s).files||[]){
       if(!SRC[s](f)||f.lastModified<since||f.size>MAXMB*1048576||!f.size)continue;
       const parts=(f.webkitRelativePath||f.name).split('/');
       out.push({s:s,f:f,rel:parts.slice(1).join('/')||parts[0]});
@@ -19,19 +18,18 @@ function picked(){
   return out;
 }
 function summary(){
-  const p=picked(),mb=p.reduce((a,x)=>a+x.f.size,0)/1048576;
-  $('sum').textContent=p.length?('将上传 '+p.length+' 个会话文件，共 '+mb.toFixed(1)+' MB'):'还没有选择文件';
-  $('go').disabled=!p.length;
+  const p=picked(),size=p.reduce((a,x)=>a+x.f.size,0);
+  gid('sum').textContent=p.length?('将上传 '+p.length+' 个会话文件，共 '+mb(size)):'还没有选择文件';
+  gid('go').disabled=!p.length;
 }
-for(const s of Object.keys(SRC))$('in-'+s).onchange=summary;
-$('days').onchange=summary;
-const H={'X-Requested-With':'sa'};
+for(const s of Object.keys(SRC))gid('in-'+s).onchange=summary;
+gid('days').onchange=summary;
 async function go(){
   const p=picked();if(!p.length)return;
-  $('go').disabled=true;$('err').textContent='';
+  gid('go').disabled=true;gid('err').textContent='';gid('barbox').hidden=false;
   try{
     let r=await fetch('/api/jobs',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},H),
-      body:JSON.stringify({limit:+$('limit').value||20})});
+      body:JSON.stringify(Object.assign({limit:+gid('limit').value||20},readOpts()))});
     if(!r.ok)throw new Error(await r.text());
     const job=await r.json();let done=0,next=0,fail=null;
     async function lane(){
@@ -40,8 +38,8 @@ async function go(){
         const u='/api/jobs/'+job.id+'/files?source='+x.s+'&path='+encodeURIComponent(x.rel);
         const res=await fetch(u,{method:'PUT',headers:H,body:x.f});
         if(!res.ok){fail=await res.text();return}
-        $('bar').style.width=(++done*100/p.length)+'%%';
-        $('sum').textContent='上传中 '+done+'/'+p.length;
+        gid('bar').style.width=(++done*100/p.length)+'%%';
+        gid('sum').textContent='上传中 '+done+'/'+p.length;
       }
     }
     await Promise.all([lane(),lane(),lane()]);
@@ -49,21 +47,26 @@ async function go(){
     r=await fetch('/api/jobs/'+job.id+'/start',{method:'POST',headers:H});
     if(!r.ok)throw new Error(await r.text());
     location.href='/job/'+job.id;
-  }catch(e){$('err').textContent='失败：'+e.message;$('go').disabled=false}
+  }catch(e){gid('err').textContent='失败：'+e.message;gid('go').disabled=false}
 }
-$('go').onclick=go;
-const names={uploading:'上传中',queued:'排队中',running:'分析中',done:'已完成',failed:'失败'};
-let me='';
+gid('go').onclick=go;
+let me='',only=false,last=[];
+function draw(){
+  const rows=last.filter(j=>!only||j.user===me);
+  gid('rows').innerHTML=rows.map(j=>
+    '<tr><td>'+badge(j.status)+'</td><td><a href="/job/'+h(j.id)+'" class="mono">'+h(j.id)+'</a>'+
+    (j.project?'<div class="sub">'+h(j.project==='*'?'全部目录':j.project)+'</div>':'')+'</td><td>'+h(j.user)+'</td><td>'+rel(j.created)+
+    '</td><td class="num">'+j.files+'</td><td>'+(j.status==='done'?'<a href="/r/'+h(j.id)+'/report.html" target="_blank" rel="noopener">打开报告</a>':'')+
+    '</td></tr>').join('');
+  gid('empty').hidden=rows.length>0;gid('tbl').hidden=!rows.length;
+  gid('empty').innerHTML=only?'<b>你还没有提交过分析</b>点右上角「发起分析」，选一个目录就能开始。':'<b>还没有任务</b>点右上角「发起分析」开始第一次。';
+}
 async function jobs(){
-  const r=await fetch('/api/jobs');if(!r.ok)return;
-  const d=await r.json();me=d.me;const only=$('mine').checked;
-  $('rows').innerHTML=d.jobs.filter(j=>!only||j.user===me).map(j=>
-    '<tr><td><a href="/job/'+j.id+'">'+j.id+'</a></td><td>'+j.user+'</td><td>'+
-    new Date(j.created*1000).toLocaleString()+'</td><td><span class="badge s-'+j.status+'">'+names[j.status]+
-    '</span></td><td>'+j.files+'</td><td>'+(j.status==='done'?'<a href="/r/'+j.id+'/report.html" target="_blank">报告</a>':'')+
-    '</td></tr>').join('')||'<tr><td colspan="6" class="muted">暂无任务</td></tr>';
+  try{const r=await fetch('/api/jobs');if(!r.ok)return;const d=await r.json();me=d.me;last=d.jobs;draw()}catch(e){}
 }
-$('mine').onchange=jobs;jobs();setInterval(jobs,5000);summary();
+function setOnly(v){only=v;gid('f-all').setAttribute('aria-pressed',!v);gid('f-mine').setAttribute('aria-pressed',v);draw()}
+gid('f-all').onclick=()=>setOnly(false);gid('f-mine').onclick=()=>setOnly(true);
+jobs();setInterval(()=>{if(!document.hidden)jobs()},5000);summary();
 '''
 
 SOURCES = [
@@ -74,19 +77,25 @@ SOURCES = [
 
 
 def index_page(user, max_mb):
-    rows = ''.join(
-        '<div class="row"><b>%s</b><span class="hint">选择文件夹 %s</span>'
-        '<input type="file" id="in-%s" webkitdirectory multiple></div>' % (label, path, key)
+    pickers = ''.join(
+        '<div class="field"><label for="in-%s">%s</label><input type="file" id="in-%s" webkitdirectory multiple>'
+        '<p class="hint">选择文件夹 <code>%s</code></p></div>' % (key, label, key, path)
         for key, label, path in SOURCES)
-    body = ('<div class="card"><h2>上传历史会话</h2>'
-            '<p class="muted">只需选你实际使用的那一项。隐藏目录在选择框里按 ⌘⇧G（Mac）或直接输入路径（Windows）。'
-            '服务器分析完成后会删除你上传的原始会话，只保留报告。</p>%s'
-            '<div class="row"><b>范围</b><span>只取最近 <input type="number" id="days" value="14" min="1" max="365" style="width:70px"> 天修改过的，'
-            '最多分析 <input type="number" id="limit" value="20" min="1" max="50" style="width:70px"> 个会话</span></div>'
-            '<div class="bar"><i id="bar"></i></div>'
-            '<p><button id="go" disabled>开始分析</button> <span id="sum" class="muted"></span> <span id="err" class="err"></span></p></div>'
-            '<div class="card"><h2>全部任务 <label class="muted" style="font-weight:normal;margin-left:12px">'
-            '<input type="checkbox" id="mine"> 只看我的</label></h2>'
-            '<table><thead><tr><th>编号</th><th>提交人</th><th>时间</th><th>状态</th><th>文件数</th><th></th></tr></thead>'
-            '<tbody id="rows"></tbody></table></div>') % rows
-    return shell('Skill 使用复盘', body, user, INDEX_SCRIPT % {'maxmb': max_mb})
+    manual = ('<div class="card"><details class="fold" style="border:0;margin:0;padding:0"><summary>没装同步工具？手动上传会话文件</summary>'
+              '<p class="muted small">只需选你实际使用的那一项。隐藏目录在选择框里按 ⌘⇧G（Mac），或直接输入路径（Windows）。'
+              '分析完成后服务器会删除你上传的原始会话，只保留报告。</p>%s'
+              '<div class="grid3"><div class="field"><label for="days">只取最近（天）</label><input type="number" id="days" value="14" min="1" max="365"></div>'
+              '<div class="field"><label for="limit">最多会话数</label><input type="number" id="limit" value="20" min="1" max="50"></div></div>'
+              + OPTS_HTML +
+              '<div id="barbox" hidden class="bar" style="margin-bottom:12px"><i id="bar"></i></div>'
+              '<div class="actions"><button id="go" disabled>上传并开始分析</button><span id="sum" class="muted small" aria-live="polite"></span>'
+              '<span id="err" class="err" role="alert"></span></div></details></div>') % pickers
+    body = ('<div class="head"><div class="t"><h1>分析任务</h1><p class="muted">团队里的分析任务和报告。'
+            '分析的是已经同步到服务器上的会话。</p></div>'
+            '<div class="actions"><a class="btn" href="/u/' + esc(user) + '">发起分析</a></div></div>'
+            '<div class="card flush"><div class="ch"><h2>全部任务</h2><div class="seg" role="group" aria-label="筛选">'
+            '<button id="f-all" aria-pressed="true">全部</button><button id="f-mine" aria-pressed="false">我的</button></div></div>'
+            '<div class="tw"><table id="tbl" style="margin-top:10px"><thead><tr><th>状态</th><th>任务</th><th>提交人</th><th>创建</th>'
+            '<th class="num">文件</th><th>报告</th></tr></thead><tbody id="rows"></tbody></table></div>'
+            '<div class="empty" id="empty">加载中…</div></div>' + manual)
+    return shell('分析任务', body, user, INDEX_SCRIPT % {'maxmb': max_mb} + OPTS_JS + 'loadOpts();', 'jobs')

@@ -210,6 +210,25 @@ class ClaudeAdapterTests(unittest.TestCase):
         plan.context = {'binary': 'claude', 'env': {}}
         return plan
 
+    def test_effort_is_passed_only_when_asked_for(self):
+        task = AgentTask('p', Path('/repo'), 10)
+        plain = claude.build_command('claude', task, self.plan((Need('delegation', 'forbidden'),), model='M'))
+        self.assertNotIn('--effort', plain)
+        high = claude.build_command('claude', task, self.plan((Need('delegation', 'forbidden'),), model='M', effort='high'))
+        self.assertEqual(high[high.index('--effort') + 1], 'high')
+
+    def test_codex_refuses_effort_instead_of_ignoring_it(self):
+        with self.assertRaises(AuditError):
+            agent_backends.get('codex').plan(Selection(effort='high'), ())
+
+    def test_cli_accepts_the_five_effort_levels_only(self):
+        import skill_audit_cli
+        parser = skill_audit_cli.build_parser()
+        for level in ('low', 'medium', 'high', 'xhigh', 'max'):
+            self.assertEqual(parser.parse_args(['history', '--effort', level]).effort, level)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(['history', '--effort', 'extreme'])
+
     def test_command_read_only_without_delegation(self):
         plan = self.plan((Need('delegation', 'forbidden'),), model='M')
         command = claude.build_command('claude', AgentTask('p', Path('/repo'), 10), plan)

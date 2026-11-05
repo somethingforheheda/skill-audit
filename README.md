@@ -38,7 +38,7 @@ skill-audit update --version 0.12.0   # 装指定版本（回退用）
 | Codex，直接用 OpenAI API Key | `skill-audit init --model <模型> --base-url https://api.openai.com/ --token-env OPENAI_API_KEY` |
 | 只允许走指定网关 | 任意 init 加 `--trusted-gateway <主机名>`（可重复）；`--clear-trusted-gateway` 取消 |
 
-- 每条命令用 `--backend codex|claude-code`（别名 `claude`）选后端，默认 codex；`--model`、`--subagent-model` 覆盖 init 保存的值。模型写全名，不要用 `opus`/`sonnet` 这类会被用户设置重新映射的别名。
+- 每条命令用 `--backend codex|claude-code`（别名 `claude`）选后端，默认 codex；`--model`、`--subagent-model` 覆盖 init 保存的值；`--effort low|medium|high|xhigh|max` 指定思考强度（只有 `claude-code` 后端支持，codex 后端会明确报错而不是悄悄忽略）。模型写全名，不要用 `opus`/`sonnet` 这类会被用户设置重新映射的别名。
 - Codex 认证：`--auth gateway` 用 init 保存的网关和令牌，`--auth native` 复用 `codex login`；不指定时有网关配置就用 gateway。旧名 `company`/`chatgpt` 仍可用。
 - 网关令牌：默认变量名 `SKILL_AUDIT_API_KEY`。环境变量优先；未设置时读 `~/.skill-audit/credentials.json`（必须 0600，init 会建占位）。令牌只经环境变量传给 CLI，不进命令行参数，trace 与错误输出会脱敏。`config.json` 不含令牌。
 - `--base-url` 必须是 HTTPS（localhost 可用 HTTP），不能带账号、查询参数或片段。
@@ -113,7 +113,7 @@ skill-audit sync uninstall
 - 身份就是 `--user` 填的 id，没有密码或令牌，只适合在可信内网里使用；传输是否加密取决于服务器地址用 http 还是 https。
 - 上传的是**会话原文**，不做脱敏。只把服务器地址设为你信任的机器。
 
-服务端在 `server/`：纯标准库的 Web 应用（Python 3.9+），收同步、按用户和会话工作目录归类、可从已同步的会话发起 `history` 分析并排队执行、提供报告页。环境变量见 `server/config.py`（`SA_DATA`、`SA_PORT`、`SA_AUDIT_CMD`、`SA_ENV_FILE`、`SA_PYZ` 等）；`python3 server/app.py` 启动，登录层在 `server/auth.py`，默认只校验邮箱前缀格式，接入公司统一登录时替换这一个文件。分析时用 `history --history-home <任务目录> --skills-catalog <该用户的 Skill 目录>`，所以服务器上不需要和用户相同的路径。
+服务端在 `server/`：纯标准库的 Web 应用（Python 3.9+），收同步、按用户和会话工作目录归类、可从已同步的会话发起 `history` 分析并排队执行、提供报告页。环境变量见 `server/config.py`（`SA_DATA`、`SA_PORT`、`SA_AUDIT_CMD`、`SA_ENV_FILE`、`SA_PYZ` 等）；`python3 server/app.py` 启动，网页上可停止任务、选主模型和子代理模型、选思考强度；`SA_MODEL` 设默认模型，`SA_MODELS`（逗号分隔）给网页一个候选列表；`SA_USER_KEY=required` 要求每个用户自己填 API Key（网关地址仍由 `SA_ENV_FILE` 里的 `ANTHROPIC_BASE_URL` 固定），key 只在分析期间留在服务器内存里并通过环境变量 `SA_KEY_VAR`（默认 `ANTHROPIC_AUTH_TOKEN`）交给分析进程，不写入磁盘；`SA_EXTRA_PATH` 放 `claude` 所在目录。登录层在 `server/auth.py`，默认只校验邮箱前缀格式，接入公司统一登录时替换这一个文件。分析时用 `history --history-home <任务目录> --skills-catalog <该用户的 Skill 目录>`，所以服务器上不需要和用户相同的路径。
 
 ## 隐私与只读
 
@@ -136,6 +136,7 @@ skill-audit sync uninstall
 
 ## 版本
 
+- **0.17.4**：`history` 新增 `--effort`（思考强度，仅 claude-code 后端）；服务端网页重做：顶部导航、左边选目录右边固定的发起分析卡片、目录筛选、可复制的接入命令、任务页状态/详情/日志分开，并补了键盘焦点、跳到正文、转义用户数据等细节；网页可停止任务、选模型和思考强度、填自己的 API Key（见服务端说明）；`sync run` 的进度条改成始终只占一行。
 - **0.17.3**：`sync run` 查找会话里读过的 Skill 时不再卡住：旧写法的正则遇到几十 MB 的大会话几乎算不完，改为从每个 `SKILL.md` 出现的位置往回找路径，326 个、共 1 GB 的会话约 5 秒扫完；读取工作目录、查找 Skill、上传三个阶段都有进度条（上传按字节显示百分比、速度、剩余时间和当前文件，非终端时每 15 秒一行），Ctrl-C 干净退出，下次只传剩下的。
 - **0.17.2**：没有功能变化，只升版本号，用来实测 `sync` 从服务器自动更新（0.17.1 → 0.17.2）。
 - **0.17.1**：`sync run` 开头会问服务器有没有更新的发行包，有就下载、核对 SHA-256 和 `--version`、替换当前安装并重新运行，失败只提示不影响同步；`--no-update`、`SKILL_AUDIT_NO_UPDATE_CHECK=1` 或 `sync.json` 里的 `"auto_update": false` 可关闭。服务端新增 `/api/sync/version`，版本号直接从下载用的发行包里读取。

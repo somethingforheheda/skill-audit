@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.parse
 from pathlib import Path
 
@@ -148,6 +149,24 @@ class Feed(io.BytesIO):
         return super().seek(pos, whence)
 
 
+def cells(char):
+    if unicodedata.combining(char):
+        return 0
+    return 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+
+
+def fit(text, columns):
+    """Cut text so it occupies at most `columns` terminal cells (Chinese and emoji take two)."""
+    used, out = 0, []
+    for char in text:
+        width = cells(char)
+        if used + width > columns:
+            break
+        used += width
+        out.append(char)
+    return ''.join(out)
+
+
 class Progress:
     """One-line progress bar on a terminal; on a pipe it prints a short line now and then instead."""
 
@@ -180,12 +199,14 @@ class Progress:
         if left is not None and not finished:
             tail += '  剩余 %d:%02d' % divmod(int(left), 60)
         if self.tty:
-            width = max(10, min(28, shutil.get_terminal_size((100, 20)).columns - 60))
+            columns = shutil.get_terminal_size((100, 20)).columns
+            width = max(8, min(24, columns - 56))
             filled = int(width * ratio)
-            line = '%s [%s%s] %3d%%  %s/%s%s  %s' % (self.label, '█' * filled, '░' * (width - filled), ratio * 100,
-                                                    self.amount(done), self.amount(self.total), tail, note)
-            cols = shutil.get_terminal_size((100, 20)).columns
-            self.out.write('\r' + line[:cols - 1].ljust(cols - 1))
+            arrow = '>' if filled < width else '='
+            bar = ('=' * max(filled - 1, 0) + (arrow if filled else '')).ljust(width)
+            line = '%s [%s] %3d%%  %s/%s%s  %s' % (self.label, bar, ratio * 100,
+                                                  self.amount(done), self.amount(self.total), tail, note)
+            self.out.write('\r' + fit(line, columns - 2) + '\x1b[K')
         else:
             self.out.write('%s %3d%%  %s/%s%s\n' % (self.label, ratio * 100, self.amount(done), self.amount(self.total), tail))
         self.out.flush()
@@ -344,8 +365,11 @@ def skills_phase(args, client, need, home):
         return 0
     say(args, '会话里读过 %d 个 Skill 目录：%s' % (len(entries), '、'.join(sorted(e['name'] for e in entries))[:300]))
     missing = client.diff(rows)
-    for r in missing:
+    bar = Progress('上传 Skill 文件', len(missing), enabled=not args.quiet)
+    for number, r in enumerate(missing, 1):
         client.upload(r)
+        bar.update(number)
+    bar.finish()
     client.post('/api/sync/skills', {'entries': entries})
     return len(missing)
 
