@@ -108,12 +108,12 @@ skill-audit sync uninstall
 ```
 
 - 读取 `~/.claude/projects`、`~/.codex/sessions`、`~/.comate-engine/store`（`--history-home` 可换），只上传服务器上没有或已变化的文件；超过 128 MB 的会话工具本身读不了，直接跳过。
-- 同时上传这些会话里读过的 Skill 目录（全局 Skill 与项目 Skill 都算，只含小文本文件，每个目录最多 200 个），服务器据此核对补丁草稿所针对的当前正文。
+- 同时上传这些会话里读过的 Skill 目录（只含小文本文件，每个目录最多 200 个），服务器据此核对补丁草稿所针对的当前正文。只传放在仓库或你自己的 `.agents/skills`、`.claude/skills`、`.codex/skills` 里的 Skill，插件缓存和工具自带的不传；Claude Code 的 Skill 工具只记目录不记 `SKILL.md`，这种也能识别。不想上传 Skill：`sync init --no-skills`（写进 `sync.json`，以后都不传）或 `sync run --no-skills`（只这一次）；重新跑一次不带该参数的 `sync init` 即可恢复。
 - `sync run` 开头会问服务器有没有更新的发行包（服务器用 `SA_PYZ` 指向的文件，通过 `/api/sync/version` 和 `/download/skill-audit.pyz` 提供）：有就下载，核对 SHA-256 和 `--version`，替换当前安装并重新运行；失败只提示，不影响同步。`--no-update`、环境变量 `SKILL_AUDIT_NO_UPDATE_CHECK=1`、或 `sync.json` 里写 `"auto_update": false` 可关闭。更新来源就是你配置的服务器，用 http 时同网段的人可以篡改传输内容，所以只适合可信内网，或给服务器配 https；服务器上的发行包要在每次发版后换成新版。
-- 身份就是 `--user` 填的 id，没有密码或令牌，只适合在可信内网里使用；传输是否加密取决于服务器地址用 http 还是 https。
+- 身份就是 `--user` 填的 id，没有密码或令牌，只适合在可信内网里使用；传输是否加密取决于服务器地址用 http 还是 https。唯一的例外是服务器用 `SA_ADMINS` 指定的管理员账号：网页登录要密码，同步上传仍只认 id。
 - 上传的是**会话原文**，不做脱敏。只把服务器地址设为你信任的机器。
 
-服务端在 `server/`：纯标准库的 Web 应用（Python 3.9+），收同步、按用户和会话工作目录归类、可从已同步的会话发起 `history` 分析并排队执行、提供报告页。环境变量见 `server/config.py`（`SA_DATA`、`SA_PORT`、`SA_AUDIT_CMD`、`SA_ENV_FILE`、`SA_PYZ` 等）；`python3 server/app.py` 启动，网页上可停止任务、选主模型和子代理模型、选思考强度；`SA_MODEL` 设默认模型，`SA_MODELS`（逗号分隔）给网页一个候选列表；`SA_USER_KEY=required` 要求每个用户自己填 API Key（网关地址仍由 `SA_ENV_FILE` 里的 `ANTHROPIC_BASE_URL` 固定），key 只在分析期间留在服务器内存里并通过环境变量 `SA_KEY_VAR`（默认 `ANTHROPIC_AUTH_TOKEN`）交给分析进程，不写入磁盘；`SA_EXTRA_PATH` 放 `claude` 所在目录。登录层在 `server/auth.py`，默认只校验邮箱前缀格式，接入公司统一登录时替换这一个文件。分析时用 `history --history-home <任务目录> --skills-catalog <该用户的 Skill 目录>`，所以服务器上不需要和用户相同的路径。
+服务端在 `server/`：纯标准库的 Web 应用（Python 3.9+），收同步、按用户和会话工作目录归类、可从已同步的会话发起 `history` 分析并排队执行、提供报告页。环境变量见 `server/config.py`（`SA_DATA`、`SA_PORT`、`SA_AUDIT_CMD`、`SA_ENV_FILE`、`SA_PYZ` 等）；`python3 server/app.py` 启动，网页上可停止任务、选主模型和子代理模型、选思考强度；`SA_MODEL` 设默认模型，`SA_MODELS`（逗号分隔）给网页一个候选列表；`SA_USER_KEY=required` 要求每个用户自己填 API Key（网关地址仍由 `SA_ENV_FILE` 里的 `ANTHROPIC_BASE_URL` 固定），key 只在分析期间留在服务器内存里并通过环境变量 `SA_KEY_VAR`（默认 `ANTHROPIC_AUTH_TOKEN`）交给分析进程，不写入磁盘；`SA_EXTRA_PATH` 放 `claude` 所在目录。登录层在 `server/auth.py`，默认只校验邮箱前缀格式，接入公司统一登录时替换这一个文件。分析时用 `history --history-home <任务目录> --skills-catalog <任务自己的 Skill 目录> --skills-root <仓库的 skills 目录>`，所以服务器上不需要和用户相同的路径：任务目录里只放所选工作目录所在仓库的 Skill（仓库里一个都没有时才退回用户全局的），报告只统计这些目录里的读取；会话来自别的机器、Skill 又没同步时，状态显示为“未知”而不是“已删除”。API Key、模型、思考强度在网页的“设置”页保存在浏览器里，开始分析时才发给服务器；`SA_GATEWAY_HOSTS`（逗号分隔）限定 Key 只能发往这些 https 主机，创建任务时先发一个 1 token 的请求，Key 或模型名不对立刻报错，网关连上却不回应也会说清楚。`SA_ADMINS`（逗号分隔）指定管理员，登录时还要输入 `data/admin.key` 里的密码（没有这个文件就不能以管理员登录）；管理员多一个“全部会话”页：按目录汇总所有人的会话并显示每个会话属于谁，选目录后可以用所有人的会话做分析，这类任务的报告只有管理员能看。
 
 ## 隐私与只读
 
@@ -136,6 +136,7 @@ skill-audit sync uninstall
 
 ## 版本
 
+- **0.17.5**：修复 Python 3.9 下提示词写入子进程可能卡死、分析全部失败的问题；服务端新增“设置”页（API Key、模型、思考强度）、分析范围改为“最近 N 天”或“最近 N 个会话”二选一、完成后报告直接嵌在任务页、网站图标、`SA_GATEWAY_HOSTS` 网关白名单和创建任务时的快速预检；报告只统计所选仓库自己的 Skill，会话来自别的机器时不再把 Skill 全部划掉（改显示“状态未知”）；`sync` 只上传仓库或个人 skills 目录里的 Skill，识别 Skill 工具写的目录，新增 `--no-skills`；管理员账号（`SA_ADMINS` + 密码）可以看到所有人的会话和归属并用所有人的会话分析。
 - **0.17.4**：`history` 新增 `--effort`（思考强度，仅 claude-code 后端）；服务端网页重做：顶部导航、左边选目录右边固定的发起分析卡片、目录筛选、可复制的接入命令、任务页状态/详情/日志分开，并补了键盘焦点、跳到正文、转义用户数据等细节；网页可停止任务、选模型和思考强度、填自己的 API Key（见服务端说明）；`sync run` 的进度条改成始终只占一行。
 - **0.17.3**：`sync run` 查找会话里读过的 Skill 时不再卡住：旧写法的正则遇到几十 MB 的大会话几乎算不完，改为从每个 `SKILL.md` 出现的位置往回找路径，326 个、共 1 GB 的会话约 5 秒扫完；读取工作目录、查找 Skill、上传三个阶段都有进度条（上传按字节显示百分比、速度、剩余时间和当前文件，非终端时每 15 秒一行），Ctrl-C 干净退出，下次只传剩下的。
 - **0.17.2**：没有功能变化，只升版本号，用来实测 `sync` 从服务器自动更新（0.17.1 → 0.17.2）。

@@ -105,7 +105,7 @@ def make_summary(report):
             inventory.update(str(p.absolute()) for p in path.rglob('SKILL.md') if p.is_file())
         except OSError as exc:
             gaps.append('Skill 目录扫描不完整：' + type(exc).__name__)
-    states = history_extract.current_skill_states(inventory)
+    states = history_extract.current_skill_states(inventory, report.get('scope', {}).get('catalog_roots', []))
     selected_times = [h.timestamp(x.get('last_active')) for x in report['sessions']]
     selected_times += [h.timestamp(x.get('timestamp')) for x in report['extraction']['reads']]
     selected_times = [x for x in selected_times if x is not None]

@@ -22,6 +22,13 @@ import runner  # noqa: E402
 H = {'X-Requested-With': 'sa'}
 
 
+def auth_sign_plain(name):
+    import hashlib
+    import hmac
+    import auth
+    return hmac.new(auth._secret(), name.encode(), hashlib.sha256).hexdigest()[:40]
+
+
 class WebTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -68,6 +75,64 @@ class WebTests(unittest.TestCase):
         self.assertEqual(res.status, 200)
         self.assertIn('分析任务'.encode(), data)
 
+    def test_admin_needs_a_password_and_alone_sees_and_analyzes_everyones_sessions(self):
+        from unittest import mock
+        import store
+        form = {'Content-Type': 'application/x-www-form-urlencoded'}
+        for user in ('annx', 'bobx'):
+            folder = store.user_dir(user) / 'sessions' / 'claude' / '-w-app'
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / ('%s.jsonl' % user)).write_text('{}\n', encoding='utf-8')
+            store.append(user, {'k': 'claude/-w-app/%s.jsonl' % user, 's': 3, 'm': int(time.time()), 'p': '/w/team-app'})
+        key_file = config.DATA / 'admin.key'
+        with mock.patch.object(config, 'ADMINS', ['boss']):
+            res, data = self.call('POST', '/login', 'user=boss', headers=form)
+            self.assertEqual(res.status, 401)
+            self.assertIn('管理员密码'.encode(), data)
+            res, _ = self.call('POST', '/login', 'user=boss&password=s3cret-pass', headers=form)
+            self.assertEqual(res.status, 401)
+            key_file.write_text('s3cret-pass\n', encoding='utf-8')
+            try:
+                res, _ = self.call('POST', '/login', 'user=boss&password=wrong', headers=form)
+                self.assertEqual(res.status, 401)
+                res, _ = self.call('POST', '/login', 'user=boss&password=s3cret-pass', headers=form)
+                self.assertEqual(res.status, 302)
+                boss = res.getheader('Set-Cookie').split(';')[0]
+                plain = 'sa_user=boss.' + auth_sign_plain('boss')
+                self.assertEqual(self.call('GET', '/all', cookie=plain)[0].status, 302)
+                alice = self.login('alicex')
+                self.assertEqual(self.call('GET', '/all', cookie=alice)[0].status, 403)
+                self.assertEqual(self.api('GET', '/api/all', alice)[0], 403)
+                self.assertEqual(self.api('GET', '/api/all/sessions', alice)[0], 403)
+                res, data = self.call('GET', '/all', cookie=boss)
+                self.assertEqual(res.status, 200)
+                status, data = self.api('GET', '/api/all', boss)
+                row = [p for p in json.loads(data)['projects'] if p['name'] == 'team-app'][0]
+                self.assertEqual(row['owners'], {'annx': 1, 'bobx': 1})
+                status, data = self.api('GET', '/api/all/sessions?project=team-app', boss)
+                self.assertEqual(sorted(r['user'] for r in json.loads(data)['sessions']), ['annx', 'bobx'])
+                body = json.dumps({'all_users': True, 'project': 'team-app'})
+                self.assertEqual(self.api('POST', '/api/analyze', alice, body)[0], 403)
+                status, data = self.api('POST', '/api/analyze', boss, body)
+                self.assertEqual(status, 200, data)
+                jid = json.loads(data)['id']
+                self.assertEqual(json.loads(data)['files'], 2)
+                status, data = self.api('GET', '/api/jobs/%s/owners' % jid, boss)
+                self.assertEqual(sorted(r['user'] for r in json.loads(data)['sessions']), ['annx', 'bobx'])
+                self.assertEqual(self.api('GET', '/api/jobs/%s/owners' % jid, alice)[0], 404)
+                self.assertEqual(self.api('GET', '/api/jobs/%s' % jid, alice)[0], 404)
+                self.assertEqual(self.call('GET', '/job/%s' % jid, cookie=alice)[0].status, 404)
+                self.assertEqual(self.call('GET', '/r/%s/report.html' % jid, cookie=alice)[0].status, 404)
+                listed = [j['id'] for j in json.loads(self.api('GET', '/api/jobs', alice)[1])['jobs']]
+                self.assertNotIn(jid, listed)
+                self.assertIn(jid, [j['id'] for j in json.loads(self.api('GET', '/api/jobs', boss)[1])['jobs']])
+                for _ in range(100):
+                    if json.loads(self.api('GET', '/api/jobs/%s' % jid, boss)[1])['status'] in ('done', 'failed'):
+                        break
+                    time.sleep(0.2)
+            finally:
+                key_file.unlink()
+
     def test_api_needs_header_and_login(self):
         cookie = self.login()
         res, _ = self.call('POST', '/api/jobs', '{}', cookie)
@@ -92,6 +157,149 @@ class WebTests(unittest.TestCase):
                 return row
             time.sleep(0.2)
         self.fail('job did not finish: %s' % row)
+
+    def test_settings_page_holds_the_key_and_model_fields_once(self):
+        res, _ = self.call('GET', '/settings')
+        self.assertEqual(res.status, 302)
+        cookie = self.login()
+        res, data = self.call('GET', '/settings', cookie=cookie)
+        self.assertEqual(res.status, 200)
+        self.assertIn(b'id="o-key"', data)
+        for path in ('/', '/u/alice'):
+            _, page = self.call('GET', path, cookie=cookie)
+            self.assertNotIn(b'id="o-key"', page, path)
+            self.assertIn('href="/settings"'.encode(), page, path)
+
+    def test_scope_is_either_days_or_session_count(self):
+        cookie = self.login()
+        cases = (({'days': 30}, config.MAX_SESSIONS), ({'limit': 7}, 7), ({'limit': 7, 'days': 3}, config.MAX_SESSIONS),
+                 ({}, 20), ({'limit': 99999}, config.MAX_SESSIONS))
+        for body, want in cases:
+            status, data = self.api('POST', '/api/jobs', cookie, json.dumps(body))
+            row = json.loads(data)
+            self.assertEqual((status, row['limit'], row['max_episodes']), (200, want, config.MAX_EPISODES), body)
+
+    def test_job_page_embeds_the_finished_report(self):
+        cookie = self.login()
+        jid = self.make_job(cookie)
+        self.put(cookie, jid, 'p/s.jsonl')
+        self.api('POST', '/api/jobs/%s/start' % jid, cookie)
+        self.assertEqual(self.wait(cookie, jid)['status'], 'done')
+        _, page = self.call('GET', '/job/' + jid, cookie=cookie)
+        self.assertIn(b'id="reportframe"', page)
+        self.assertIn(('/r/%s/report.html' % jid).encode(), page)
+
+    def test_failure_message_explains_known_causes_and_drops_repeats(self):
+        self.assertIn('登录', runner.explain('x\nPlease check login status, try login again with: ducc login'))
+        self.assertIn('API Key', runner.explain('{"error":{"message":"无效的令牌"}}'))
+        self.assertEqual(runner.explain('something else'), '')
+        jid = self.make_job(self.login())
+        with open(os.path.join(config.JOBS, jid, 'run.log'), 'w', encoding='utf-8') as handle:
+            handle.write('a\nsame\nsame\nsame\nb\n')
+        self.assertEqual(runner.short_tail(jid), 'a | same | b')
+
+    def test_a_bad_key_or_model_is_refused_up_front_by_a_quick_gateway_check(self):
+        import http.server
+        from unittest import mock
+        seen = []
+
+        class Gateway(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                seen.append((self.path, self.headers.get('Authorization'), json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
+                token = self.headers.get('Authorization', '')
+                if token != 'Bearer good-key-0123':
+                    code, body = 401, {'error': {'message': '无效的令牌 (request id: 1)'}}
+                elif seen[-1][2]['model'] != 'Good Model':
+                    code, body = 503, {'error': {'message': 'model not found'}}
+                else:
+                    code, body = 200, {'id': 'x'}
+                data = json.dumps(body, ensure_ascii=False).encode('utf-8')
+                self.send_response(code)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        gateway = http.server.HTTPServer(('127.0.0.1', 0), Gateway)
+        threading.Thread(target=gateway.serve_forever, daemon=True).start()
+        env_file = os.path.join(TMP, 'gateway.env')
+        with open(env_file, 'w', encoding='utf-8') as handle:
+            handle.write('ANTHROPIC_BASE_URL=http://127.0.0.1:%d\n' % gateway.server_address[1])
+        cookie = self.login()
+        try:
+            with mock.patch.object(config, 'ENV_FILE', env_file):
+                status, data = self.api('POST', '/api/jobs', cookie, json.dumps({'api_key': 'bad-key-0123456', 'model': 'Good Model'}))
+                self.assertEqual(status, 400)
+                self.assertIn('API Key', data.decode())
+                self.assertNotIn('request id', data.decode())
+                status, data = self.api('POST', '/api/jobs', cookie, json.dumps({'api_key': 'good-key-0123', 'model': 'Nope'}))
+                self.assertEqual(status, 400)
+                self.assertIn('Nope', data.decode())
+                status, data = self.api('POST', '/api/jobs', cookie, json.dumps({'api_key': 'good-key-0123', 'model': 'Good Model[1M]'}))
+                self.assertEqual(status, 200)
+        finally:
+            gateway.shutdown()
+        self.assertEqual(seen[-1][0], '/v1/messages')
+        self.assertEqual(seen[-1][2]['model'], 'Good Model')
+
+    def test_a_gateway_that_connects_but_never_answers_gets_an_accurate_message(self):
+        import http.server
+        from unittest import mock
+
+        class Slow(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                time.sleep(1.5)
+
+        gateway = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Slow)
+        gateway.daemon_threads = True
+        threading.Thread(target=gateway.serve_forever, daemon=True).start()
+        env_file = os.path.join(TMP, 'slow.env')
+        with open(env_file, 'w', encoding='utf-8') as handle:
+            handle.write('ANTHROPIC_BASE_URL=http://127.0.0.1:%d\n' % gateway.server_address[1])
+        cookie = self.login()
+        try:
+            with mock.patch.object(config, 'ENV_FILE', env_file), mock.patch.object(runner, 'PREFLIGHT_SECONDS', 0.3):
+                status, data = self.api('POST', '/api/jobs', cookie, json.dumps({'api_key': 'good-key-0123', 'model': 'Slow Model'}))
+        finally:
+            gateway.shutdown()
+        self.assertEqual(status, 502)
+        self.assertIn('没有回应', data.decode())
+        self.assertIn('Slow Model', data.decode())
+        self.assertNotIn('连不上', data.decode())
+
+    def test_the_key_is_never_sent_to_a_gateway_outside_the_allowed_list(self):
+        from unittest import mock
+        cookie = self.login()
+        env_file = os.path.join(TMP, 'allow.env')
+        for url, host in (('https://evil.example.com', 'evil.example.com'), ('http://gw.example.com', 'gw.example.com'), ('', '')):
+            with open(env_file, 'w', encoding='utf-8') as handle:
+                handle.write('ANTHROPIC_BASE_URL=%s\n' % url if url else '\n')
+            with mock.patch.object(config, 'ENV_FILE', env_file), mock.patch.object(config, 'GATEWAY_HOSTS', ['gw.example.com']):
+                status, data = self.api('POST', '/api/jobs', cookie, json.dumps({'api_key': 'some-key-0123456'}))
+            self.assertEqual(status, 503, url)
+            self.assertIn('允许列表', data.decode())
+        home = runner.build_env('k')
+        self.assertTrue(home['SKILL_AUDIT_HOME'].endswith('.skill-audit'))
+        self.assertEqual(home['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'], '1')
+        with mock.patch.object(config, 'GATEWAY_HOSTS', ['gw.example.com']):
+            runner.build_env('k')
+        with open(os.path.join(home['SKILL_AUDIT_HOME'], 'config.json'), encoding='utf-8') as handle:
+            self.assertEqual(json.load(handle), {'trusted_gateways': ['gw.example.com']})
+
+    def test_icon_is_served_without_login_and_linked_from_pages(self):
+        res, data = self.call('GET', '/favicon.svg')
+        self.assertEqual((res.status, res.getheader('Content-Type')), (200, 'image/svg+xml'))
+        self.assertIn(b'<svg', data)
+        for path in ('/favicon.ico', '/apple-touch-icon.png'):
+            res, data = self.call('GET', path)
+            self.assertEqual((res.status, res.getheader('Content-Type'), data[:4]), (200, 'image/png', b'\x89PNG'), path)
+        _, page = self.call('GET', '/login')
+        self.assertIn(b'rel="icon"', page)
 
     def test_upload_rules(self):
         cookie = self.login()
@@ -137,7 +345,7 @@ class WebTests(unittest.TestCase):
 
     def test_model_and_effort_are_validated_and_passed_to_the_command(self):
         cookie = self.login()
-        for bad in ({'model': '--evil'}, {'model': 'a b'}, {'subagent_model': 'x;y'}, {'effort': 'extreme'}):
+        for bad in ({'model': '--evil'}, {'model': '-x'}, {'model': 'a\nb'}, {'subagent_model': 'x;y'}, {'effort': 'extreme'}):
             self.assertEqual(self.api('POST', '/api/jobs', cookie, json.dumps(bad))[0], 400, bad)
         status, data = self.api('POST', '/api/jobs', cookie, json.dumps(
             {'model': 'my-model[1m]', 'subagent_model': 'sub-model', 'effort': 'high'}))
@@ -149,6 +357,15 @@ class WebTests(unittest.TestCase):
         text = self.call('GET', '/r/%s/report.html' % jid, cookie=cookie)[1].decode()
         for part in ('--model', 'my-model[1m]', '--subagent-model', 'sub-model', '--effort', 'high'):
             self.assertIn(part, text)
+        status, data = self.api('POST', '/api/jobs', cookie, json.dumps({'model': 'Opus 5.5[1M]', 'subagent_model': 'Claude Sonnet 5.5[1M]'}))
+        self.assertEqual(status, 200)
+        jid = json.loads(data)['id']
+        self.put(cookie, jid, 'p/s.jsonl')
+        self.api('POST', '/api/jobs/%s/start' % jid, cookie)
+        self.wait(cookie, jid)
+        text = self.call('GET', '/r/%s/report.html' % jid, cookie=cookie)[1].decode()
+        self.assertIn('"Opus 5.5[1M]"', text)
+        self.assertIn('"Claude Sonnet 5.5[1M]"', text)
         jid = self.make_job(cookie)
         self.put(cookie, jid, 'p/s.jsonl')
         self.api('POST', '/api/jobs/%s/start' % jid, cookie)

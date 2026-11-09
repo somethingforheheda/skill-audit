@@ -1,4 +1,4 @@
-from pages import OPTS_HTML, OPTS_JS, esc, shell
+from pages import OPTS_JS, SAVED_HTML, SCOPE_HTML, esc, shell
 
 INDEX_SCRIPT = '''
 const MAXMB=%(maxmb)d;
@@ -7,7 +7,8 @@ const SRC={
   codex:f=>f.name.endsWith('.jsonl'),
   comate:f=>f.name.startsWith('chat_session_')&&!f.name.endsWith('.deleted')};
 function picked(){
-  const since=Date.now()-(+gid('days').value||14)*864e5, out=[];
+  const byDays=gid('scope-days').checked;
+  const since=byDays?Date.now()-(+gid('days').value||30)*864e5:0, out=[];
   for(const s of Object.keys(SRC)){
     for(const f of gid('in-'+s).files||[]){
       if(!SRC[s](f)||f.lastModified<since||f.size>MAXMB*1048576||!f.size)continue;
@@ -15,7 +16,8 @@ function picked(){
       out.push({s:s,f:f,rel:parts.slice(1).join('/')||parts[0]});
     }
   }
-  return out;
+  if(byDays)return out;
+  return out.sort((a,b)=>b.f.lastModified-a.f.lastModified).slice(0,+gid('limit').value||20);
 }
 function summary(){
   const p=picked(),size=p.reduce((a,x)=>a+x.f.size,0);
@@ -23,13 +25,14 @@ function summary(){
   gid('go').disabled=!p.length;
 }
 for(const s of Object.keys(SRC))gid('in-'+s).onchange=summary;
-gid('days').onchange=summary;
+for(const id of ['days','limit','scope-days','scope-count'])gid(id).onchange=summary;
 async function go(){
   const p=picked();if(!p.length)return;
+  const bad=optsProblem();if(bad){gid('err').textContent=bad;return}
   gid('go').disabled=true;gid('err').textContent='';gid('barbox').hidden=false;
   try{
     let r=await fetch('/api/jobs',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},H),
-      body:JSON.stringify(Object.assign({limit:+gid('limit').value||20},readOpts()))});
+      body:JSON.stringify(Object.assign(readScope(),readOpts()))});
     if(!r.ok)throw new Error(await r.text());
     const job=await r.json();let done=0,next=0,fail=null;
     async function lane(){
@@ -56,7 +59,7 @@ function draw(){
   gid('rows').innerHTML=rows.map(j=>
     '<tr><td>'+badge(j.status)+'</td><td><a href="/job/'+h(j.id)+'" class="mono">'+h(j.id)+'</a>'+
     (j.project?'<div class="sub">'+h(j.project==='*'?'全部目录':j.project)+'</div>':'')+'</td><td>'+h(j.user)+'</td><td>'+rel(j.created)+
-    '</td><td class="num">'+j.files+'</td><td>'+(j.status==='done'?'<a href="/r/'+h(j.id)+'/report.html" target="_blank" rel="noopener">打开报告</a>':'')+
+    '</td><td class="num">'+j.files+'</td><td>'+(j.status==='done'?'<a href="/job/'+h(j.id)+'">查看报告</a>':'')+
     '</td></tr>').join('');
   gid('empty').hidden=rows.length>0;gid('tbl').hidden=!rows.length;
   gid('empty').innerHTML=only?'<b>你还没有提交过分析</b>点右上角「发起分析」，选一个目录就能开始。':'<b>还没有任务</b>点右上角「发起分析」开始第一次。';
@@ -66,7 +69,7 @@ async function jobs(){
 }
 function setOnly(v){only=v;gid('f-all').setAttribute('aria-pressed',!v);gid('f-mine').setAttribute('aria-pressed',v);draw()}
 gid('f-all').onclick=()=>setOnly(false);gid('f-mine').onclick=()=>setOnly(true);
-jobs();setInterval(()=>{if(!document.hidden)jobs()},5000);summary();
+scopeInit();jobs();setInterval(()=>{if(!document.hidden)jobs()},5000);summary();
 '''
 
 SOURCES = [
@@ -84,9 +87,7 @@ def index_page(user, max_mb):
     manual = ('<div class="card"><details class="fold" style="border:0;margin:0;padding:0"><summary>没装同步工具？手动上传会话文件</summary>'
               '<p class="muted small">只需选你实际使用的那一项。隐藏目录在选择框里按 ⌘⇧G（Mac），或直接输入路径（Windows）。'
               '分析完成后服务器会删除你上传的原始会话，只保留报告。</p>%s'
-              '<div class="grid3"><div class="field"><label for="days">只取最近（天）</label><input type="number" id="days" value="14" min="1" max="365"></div>'
-              '<div class="field"><label for="limit">最多会话数</label><input type="number" id="limit" value="20" min="1" max="50"></div></div>'
-              + OPTS_HTML +
+              + SCOPE_HTML + SAVED_HTML +
               '<div id="barbox" hidden class="bar" style="margin-bottom:12px"><i id="bar"></i></div>'
               '<div class="actions"><button id="go" disabled>上传并开始分析</button><span id="sum" class="muted small" aria-live="polite"></span>'
               '<span id="err" class="err" role="alert"></span></div></details></div>') % pickers

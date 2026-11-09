@@ -98,7 +98,8 @@ class SyncTests(SyncBase):
         sync_client.cmd_init(self.args())
         self.assertEqual(sync_client.cmd_run(self.args()), 0)
         info = browse.summary('carol')
-        self.assertEqual((info['files'], info['skills']), (3, 1))
+        self.assertEqual((info['files'], len(store.state('carol')['skills'])), (3, 1))
+        self.assertEqual(info['skills'], 0)
         self.assertEqual(sorted(p['name'] for p in info['projects']), ['app-client', 'other-repo'])
         stored = store.user_dir('carol') / 'skills'
         names = sorted(p.relative_to(stored).as_posix().split('/', 1)[1] for p in stored.rglob('*') if p.is_file())
@@ -131,7 +132,7 @@ class SyncTests(SyncBase):
         sync_client.cmd_run(self.args(user='erin'))
         meta = runner.create_from_store('erin', {'project': 'app-client', 'limit': 5})
         self.assertEqual(meta['files'], 2)
-        self.assertTrue(meta['catalog'].endswith('skills'))
+        self.assertTrue(Path(meta['catalog']).is_dir())
         for _ in range(100):
             row = jobs.get(meta['id'])
             if row['status'] in ('done', 'failed'):
@@ -143,6 +144,60 @@ class SyncTests(SyncBase):
         with self.assertRaises(jobs.JobError):
             runner.create_from_store('erin', {'project': 'nope'})
         self.assertEqual(store.state('erin')['bytes'] > 0, True)
+
+    def test_no_skills_option_is_saved_and_skips_the_skill_upload(self):
+        sync_client.cmd_init(self.args(user='gina', quiet=True, no_skills=True))
+        self.assertIs(sync_client.load_config()['skills'], False)
+        sync_client.cmd_run(self.args(user='gina', no_skills=True))
+        self.assertEqual(store.state('gina')['skills'], {})
+        self.assertGreater(len(store.state('gina')['files']), 0)
+        sync_client.cmd_init(self.args(user='gina', quiet=True))
+        self.assertNotIn('skills', sync_client.load_config())
+
+
+class JobCatalogTests(unittest.TestCase):
+    def put(self, user, key, origin):
+        folder = store.user_dir(user) / 'skills' / key
+        (folder / 'refs').mkdir(parents=True, exist_ok=True)
+        (folder / 'SKILL.md').write_text('---\nname: x\n---\n', encoding='utf-8')
+        (folder / 'refs' / 'a.md').write_text('a', encoding='utf-8')
+        store.append(user, {'skill': key, 'origin': origin, 'name': key.split('@')[0]})
+
+    def test_repository_skills_win_over_global_ones_and_plugins_never_count(self):
+        config.ensure_dirs()
+        user = 'frank'
+        store.append(user, {'k': 'claude/p/s1.jsonl', 's': 1, 'm': int(time.time()), 'p': '/Users/me/work/app-client'})
+        store.append(user, {'k': 'claude/p/s2.jsonl', 's': 1, 'm': int(time.time()), 'p': '/Users/me/work/other'})
+        self.put(user, 'mine@11111111', '/Users/me/.agents/skills/mine')
+        self.put(user, 'both@22222222', '/Users/me/.agents/skills/both')
+        self.put(user, 'both@33333333', '/Users/me/work/app-client/.agents/skills/both')
+        self.put(user, 'sibling@44444444', '/Users/me/work/other/.agents/skills/sibling')
+        self.put(user, 'figma@55555555', '/Users/me/.codex/plugins/cache/x/figma/1/skills/figma')
+        self.put(user, 'imagegen@66666666', '/Users/me/.codex/skills/.system/imagegen')
+        store.append(user, {'k': 'claude/p/s3.jsonl', 's': 1, 'm': int(time.time()), 'p': '/Users/me'})
+        self.assertEqual(browse.skill_rank('C:\\Users\\me\\.agents\\skills\\w', set()), 1)
+        self.assertEqual(browse.summary(user, False)['skills'], 2)
+        catalog, roots = browse.job_catalog('abcabcabcabc', [user], 'app-client')
+        names = sorted(p.name for p in catalog.iterdir() if p.is_dir())
+        self.assertEqual(names, ['both@33333333'])
+        self.assertTrue((catalog / 'both@33333333' / 'refs' / 'a.md').is_file())
+        self.assertEqual(sorted(json.loads((catalog / '_origins.json').read_text(encoding='utf-8'))), names)
+        self.assertIn('/Users/me/work/app-client/.agents/skills', roots)
+        self.assertIn('/Users/me/work/app-client/.claude/skills', roots)
+        self.assertNotIn('/Users/me/.agents/skills', roots)
+        everything, _ = browse.job_catalog('defdefdefdef', [user], None)
+        self.assertEqual(sorted(p.name for p in everything.iterdir() if p.is_dir()),
+                         ['both@33333333', 'sibling@44444444'])
+
+    def test_global_skills_are_the_fallback_when_the_repository_has_none(self):
+        config.ensure_dirs()
+        user = 'ivy'
+        store.append(user, {'k': 'claude/p/s1.jsonl', 's': 1, 'm': int(time.time()), 'p': '/Users/ivy/work/app'})
+        self.put(user, 'mine@11111111', '/Users/ivy/.agents/skills/mine')
+        catalog, roots = browse.job_catalog('123123123123', [user], 'app')
+        self.assertEqual([p.name for p in catalog.iterdir() if p.is_dir()], ['mine@11111111'])
+        self.assertIn('/Users/ivy/.agents/skills', roots)
+        self.assertIn('/Users/ivy/.claude/skills', roots)
 
 
 def fake_pyz(version):

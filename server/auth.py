@@ -22,8 +22,22 @@ def _secret():
     return path.read_text().strip().encode()
 
 
+def is_admin(name):
+    return name in config.ADMINS
+
+
 def _sign(name):
-    return hmac.new(_secret(), name.encode(), hashlib.sha256).hexdigest()[:40]
+    scope = name + ('#admin' if is_admin(name) else '')
+    return hmac.new(_secret(), scope.encode(), hashlib.sha256).hexdigest()[:40]
+
+
+def admin_password_ok(password):
+    """Admins prove who they are with the password in data/admin.key; without that file admin sign-in is off."""
+    try:
+        saved = (config.DATA / 'admin.key').read_text(encoding='utf-8').strip()
+    except OSError:
+        return False
+    return bool(saved) and hmac.compare_digest(saved.encode('utf-8'), (password or '').encode('utf-8'))
 
 
 def valid_name(name):

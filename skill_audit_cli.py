@@ -29,7 +29,7 @@ from agent_backends.base import AgentTask, AuditError, AuditTimeout, Need, check
 
 
 PYYAML_REQUIREMENT = "PyYAML>=6.0,<7"
-APP_VERSION = "0.17.4"
+APP_VERSION = "0.17.5"
 
 
 AuditCancelled = codex_process.Cancelled
@@ -610,6 +610,7 @@ def build_parser():
     sync.add_argument("--user", help="init：你的邮箱前缀，服务器按它归类")
     sync.add_argument("--days", type=int, help="run：只同步最近 N 天修改过的会话；省略则同步全部")
     sync.add_argument("--history-home", help="run：包含 .claude/.codex/.comate-engine 的用户目录，默认当前用户目录")
+    sync.add_argument("--no-skills", action="store_true", help="init：以后同步不上传 Skill（写进 sync.json）；run：这次不上传 Skill")
     sync.add_argument("--yes", action="store_true", help="run：不再确认（定时任务用）")
     sync.add_argument("--dry-run", action="store_true", help="run：只列出将要上传的内容")
     sync.add_argument("--quiet", action="store_true", help="run：不输出进度")

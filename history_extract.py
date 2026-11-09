@@ -291,19 +291,24 @@ def single_shell_body(block,cwd,home,linked):
     return False
 
 
-def current_skill_states(paths):
-    """Snapshot current file availability; never infer deletion from absence."""
+def current_skill_states(paths, catalog_roots=()):
+    """Snapshot current file availability; never infer deletion from absence. With a synced catalog only the catalog is consulted."""
     checked_at=datetime.now(timezone.utc).isoformat()
     result={}
     for path in sorted(set(paths)):
-        try:
-            mode=Path(path).stat().st_mode
-            state='present' if stat.S_ISREG(mode) else 'unknown'
-            reason=None if state=='present' else '原路径不是普通文件'
-        except (FileNotFoundError,NotADirectoryError):
-            state,reason='missing','原始 SKILL.md 路径当前不存在，可能已删除、移动或切换分支'
-        except OSError as exc:
-            state,reason='unknown',type(exc).__name__
+        target=skill_scope.readable(path,catalog_roots)
+        if target is None:
+            state,reason='unknown','会话来自别的机器，这个 Skill 没有同步，无法判断它现在还在不在'
+        else:
+            try:
+                mode=target.stat().st_mode
+                state='present' if stat.S_ISREG(mode) else 'unknown'
+                reason=None if state=='present' else '原路径不是普通文件'
+                if state=='present' and str(target)!=path:reason='原路径不在本机，使用已同步的副本'
+            except (FileNotFoundError,NotADirectoryError):
+                state,reason='missing','原始 SKILL.md 路径当前不存在，可能已删除、移动或切换分支'
+            except OSError as exc:
+                state,reason='unknown',type(exc).__name__
         result[path]={'status':state,'checked_at':checked_at,'reason':reason}
     return result
 
@@ -375,6 +380,6 @@ def extract(bundle):
     return {'method':'deterministic_body_reads_v1','status':'partial' if uncovered or bundle['coverage']['uncovered'] or any(r['status']=='unconfirmed' for r in records) else 'complete',
         'summary':{'confirmed_reads':sum(counts.values()),'skills':len(counts),'failed_reads':sum(r['status']=='failed' for r in records),'unconfirmed_reads':sum(r['status']=='unconfirmed' for r in records)},
         'excluded_reads':len(outside),'unresolved_scope_reads':unresolved,'skills_roots':roots,
-        'current_skill_states':current_skill_states(counts),
+        'current_skill_states':current_skill_states(counts,bundle.get('scope',{}).get('catalog_roots',[])),
         'skills':[{'skill':p,'reads':n} for p,n in sorted(counts.items())], 'reads':records,'uncovered':uncovered,
         'limitations':['统计可识别的正文读取请求；不进行效果分析。未识别的工具格式、Skill 名称调用和无路径注入不推断为成功读取。','单一简单读取可由关联正文确认；合并输出仍依赖逐文件证据。不执行历史命令，复杂控制流和无法证明成功的 cd 保留为未确认。']}

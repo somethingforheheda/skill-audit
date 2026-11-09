@@ -72,7 +72,7 @@ def _clamp(value, low, high, default):
         return default
 
 
-MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,80}$')
+MODEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/\[\] -]{0,80}$')
 
 
 def clean_options(options):
@@ -80,7 +80,7 @@ def clean_options(options):
     for key in ('model', 'subagent_model'):
         value = str(options.get(key) or '').strip()
         if value and not MODEL_RE.match(value):
-            raise JobError('模型名只能包含字母、数字和 . _ : / [ ] -', 400)
+            raise JobError('模型名只能包含字母、数字、空格和 . _ : / [ ] -，并且要以字母或数字开头', 400)
         out[key] = value
     effort = str(options.get('effort') or '').strip()
     if effort and effort not in config.EFFORTS:
@@ -95,7 +95,7 @@ def create(user, options):
     job_dir(jid).mkdir(parents=True)
     now = int(time.time())
     meta = {'id': jid, 'user': user, 'created': now, 'updated': now, 'status': 'uploading',
-            'limit': _clamp(options.get('limit'), 1, 50, 20),
+            'limit': config.MAX_SESSIONS if options.get('days') else _clamp(options.get('limit'), 1, config.MAX_SESSIONS, 20),
             'max_episodes': _clamp(options.get('max_episodes'), 1, config.MAX_EPISODES, config.MAX_EPISODES),
             'sources': {}, 'files': 0, 'bytes': 0, 'message': ''}
     meta.update(extra)

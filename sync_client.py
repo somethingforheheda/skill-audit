@@ -40,12 +40,12 @@ def load_config():
     return data
 
 
-def save_config(server, user):
+def save_config(server, user, skills=True):
     path = config_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-        json.dump({'server': server, 'user': user}, handle, ensure_ascii=False)
+        json.dump({'server': server, 'user': user, **({} if skills else {'skills': False})}, handle, ensure_ascii=False)
 
 
 def normalize_server(value):
@@ -232,8 +232,10 @@ def cmd_init(args):
         raise SyncError('用户 id 应为 2-32 位的字母、数字、点、下划线、短横线（你的邮箱前缀）')
     server = normalize_server(args.server or '')
     status = Client(server, user, 15).status()
-    save_config(server, user)
-    print('已保存：%s @ %s（服务器上已有 %d 个会话文件）' % (user, server, status.get('files', 0)))
+    skills = not getattr(args, 'no_skills', False)
+    save_config(server, user, skills)
+    print('已保存：%s @ %s（服务器上已有 %d 个会话文件）%s' % (
+        user, server, status.get('files', 0), '' if skills else '；以后同步不再上传 Skill'))
     return 0
 
 
@@ -323,7 +325,7 @@ def cmd_run(args):
         projects[r['abs']] = sync_scan.peek_project(r['s'], r['abs'])
         bar.update(number)
     bar.finish()
-    skills = skills_phase(args, client, need, home)
+    skills = 0 if getattr(args, 'no_skills', False) or cfg.get('skills') is False else skills_phase(args, client, need, home)
     failed = done = 0
     bar = Progress('上传', size, size=True, enabled=show)
     sent = [0]
@@ -358,7 +360,7 @@ def skills_phase(args, client, need, home):
     dirs = sync_scan.skill_dirs_in([r['abs'] for r in need], home, lambda n, total: bar.update(n))
     bar.finish()
     rows, entries = [], []
-    for directory in dirs.values():
+    for directory in (d for d in dirs.values() if sync_scan.own_skill(d)):
         rows += sync_scan.skill_files(directory)
         entries.append({'key': sync_scan.skill_key(directory), 'origin': str(directory), 'name': directory.name})
     if not rows:

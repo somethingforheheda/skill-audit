@@ -22,6 +22,7 @@ import history_episodes as episodes_lib
 import history_lessons as lessons
 import history_reader as reader
 import history_review as h
+import skill_scope
 
 VERSION = 'episodes-v2'
 PACKET_CAP, SKILL_CAP, DIGEST_REQUESTS = 90000, 45000, 60
@@ -190,15 +191,23 @@ def skill_catalog(report, episodes):
         if Path(root).is_dir():
             paths |= {str(p.absolute()) for p in Path(root).rglob('SKILL.md') if p.is_file()}
     catalog = []
+    roots = scope.get('catalog_roots') or []
+    seen = set()
     for path in sorted(paths):
+        source = skill_scope.readable(path, roots)
+        if source is not None and str(source) in seen:
+            continue
         try:
-            text = Path(path).read_text(encoding='utf-8', errors='replace')
+            if source is None:
+                raise OSError
+            text = source.read_text(encoding='utf-8', errors='replace')
         except OSError:
             catalog.append({'name': Path(path).parent.name, 'path': path, 'present': False, 'description': ''})
             continue
+        seen.add(str(source))
         name = re.search(r'^name:\s*(.+)$', text, re.M)
         desc = re.search(r'^description:\s*(.+?)(?=^[\w-]+:|^---)', text, re.S | re.M)
-        catalog.append({'name': (name[1] if name else Path(path).parent.name).strip().strip('"\''), 'path': path,
+        catalog.append({'name': (name[1] if name else Path(path).parent.name).strip().strip('"\''), 'path': str(source),
                         'present': True, 'description': re.sub(r'\s+', ' ', desc[1]).strip().strip('"|>')[:500] if desc else ''})
     return catalog
 

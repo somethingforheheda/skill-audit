@@ -2,16 +2,19 @@ import json
 import mimetypes
 import os
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import auth  # noqa: E402
+import icon  # noqa: E402
 import browse  # noqa: E402
 import config  # noqa: E402
 import jobs  # noqa: E402
 import page_index  # noqa: E402
+import page_settings  # noqa: E402
 import page_users  # noqa: E402
 import pages  # noqa: E402
 import release  # noqa: E402
@@ -23,8 +26,12 @@ HTML = 'text/html; charset=utf-8'
 
 def public(meta):
     keys = ('id', 'user', 'created', 'status', 'message', 'files', 'bytes', 'limit', 'model', 'subagent_model',
-            'effort', 'project', 'days', 'max_episodes')
+            'effort', 'project', 'days', 'max_episodes', 'all_users')
     return {k: meta.get(k) for k in keys}
+
+
+def visible(meta, user):
+    return not meta.get('all_users') or auth.is_admin(user)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -135,6 +142,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, 'ok', 'text/plain')
         if path == '/login':
             return self.send(200, pages.login_page())
+        if path in ('/favicon.svg', '/favicon.ico', '/apple-touch-icon.png'):
+            cache = {'Cache-Control': 'public, max-age=86400'}
+            if path == '/favicon.svg':
+                return self.send(200, icon.ICON_SVG, 'image/svg+xml', cache)
+            return self.send(200, icon.png_bytes(), 'image/png', cache)
         if path == '/api/sync/version':
             info = release.pyz_info()
             return self.send_json(200 if info else 404, info or {'error': 'no release configured'})
@@ -147,6 +159,20 @@ class Handler(BaseHTTPRequestHandler):
         user = self.me()
         if not user:
             return self.redirect('/login')
+        if path == '/settings':
+            return self.send(200, page_settings.settings_page(user))
+        if path == '/all':
+            if not auth.is_admin(user):
+                return self.send(403, pages.shell('没有权限', '<div class="card">只有管理员能看全部会话。<a href="/">返回</a></div>', user))
+            return self.send(200, page_users.all_page(user))
+        if path in ('/api/all', '/api/all/sessions') and not auth.is_admin(user):
+            return self.send_json(403, {'error': '只有管理员可以查看'})
+        if path == '/api/all':
+            return self.send_json(200, browse.summary_all())
+        if path == '/api/all/sessions':
+            query = parse_qs(url.query)
+            project = (query.get('project') or [''])[0] or None
+            return self.send_json(200, {'sessions': browse.session_rows(project)[:3000]})
         if path == '/users':
             return self.send(200, page_users.users_page(user, self.headers.get('Host') or 'SERVER:8200'))
         if path.startswith('/u/') and auth.valid_name(path[3:]):
@@ -163,26 +189,35 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, page_index.index_page(user, config.MAX_FILE_MB))
         if path.startswith('/job/'):
             jid = path.split('/')[2]
-            if not jobs.get(jid):
+            if not jobs.get(jid) or not visible(jobs.get(jid), user):
                 return self.send(404, pages.shell('不存在', '<div class="card">任务不存在或已删除。<a href="/">返回</a></div>', user))
             return self.send(200, pages.job_page(jid, user))
         if path == '/api/jobs':
-            return self.send_json(200, {'me': user, 'jobs': [public(m) for m in jobs.list_jobs()]})
+            return self.send_json(200, {'me': user, 'jobs': [public(m) for m in jobs.list_jobs() if visible(m, user)]})
+        if path.startswith('/api/jobs/') and path.endswith('/owners'):
+            meta = jobs.get(path.split('/')[3])
+            if not meta or not meta.get('all_users') or not auth.is_admin(user):
+                return self.send_json(404, {'error': 'not found'})
+            try:
+                rows = json.loads((jobs.job_dir(meta['id']) / 'owners.json').read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                rows = []
+            return self.send_json(200, {'sessions': rows})
         if path.startswith('/api/jobs/'):
             meta = jobs.get(path.split('/')[3])
-            if not meta:
+            if not meta or not visible(meta, user):
                 return self.send_json(404, {'error': 'not found'})
             row = public(meta)
             row.update(mine=meta['user'] == user, log=runner.tail_log(meta['id']) if meta['status'] != 'done' else '')
             return self.send_json(200, row)
         if path.startswith('/r/'):
-            return self.report(path)
+            return self.report(path, user)
         self.send(404, 'not found', 'text/plain')
 
-    def report(self, path):
+    def report(self, path, user):
         parts = path.split('/')[2:]
         jid = parts[0] if parts else ''
-        if not jobs.get(jid):
+        if not jobs.get(jid) or not visible(jobs.get(jid), user):
             return self.send(404, 'not found', 'text/plain')
         base = runner.report_dir(jid).resolve()
         target = (base / '/'.join(parts[1:] or ['report.html'])).resolve()
@@ -200,6 +235,11 @@ class Handler(BaseHTTPRequestHandler):
             name = (form.get('user') or [''])[0].strip().lower()
             if not auth.valid_name(name):
                 return self.send(400, pages.login_page('请输入 2-32 位的邮箱前缀（字母、数字、点、下划线、短横线）', name))
+            if auth.is_admin(name):
+                password = (form.get('password') or [''])[0]
+                if not auth.admin_password_ok(password):
+                    time.sleep(1)
+                    return self.send(401, pages.login_page('管理员密码不对' if password else '这是管理员账号，请输入密码', name, True))
             return self.redirect('/', {'Set-Cookie': auth.login_cookie(name)})
         if path == '/logout':
             return self.redirect('/login', {'Set-Cookie': auth.logout_cookie()})

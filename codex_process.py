@@ -2,6 +2,7 @@
 import os
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -54,12 +55,21 @@ class Control:
 def execute(command, prompt, timeout, env, cwd, control=None, label='Codex'):
     control = control or Control()
     control.check()
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    # The prompt goes through a file, not a pipe: communicate(input=...) retried after a timeout never finishes
+    # writing or closes stdin on Python 3.9, so a CLI that starts slowly would wait for its prompt forever.
+    with tempfile.TemporaryFile() as feed:
+        feed.write((prompt or '').encode('utf-8'))
+        feed.flush()
+        feed.seek(0)
+        return _run(command, feed, timeout, env, cwd, control, label)
+
+
+def _run(command, feed, timeout, env, cwd, control, label):
+    process = subprocess.Popen(command, stdin=feed, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True, env=env, cwd=cwd,
                                start_new_session=(os.name == 'posix'))
     control.add(process)
     start = time.monotonic()
-    first = True
     try:
         while True:
             control.check()
@@ -67,11 +77,11 @@ def execute(command, prompt, timeout, env, cwd, control=None, label='Codex'):
             if remaining <= 0:
                 raise TimedOut(f'{label} 超时（{timeout} 秒），不会自动原样重跑此任务')
             try:
-                out, err = process.communicate(input=prompt if first else None, timeout=min(.2, remaining))
+                out, err = process.communicate(timeout=min(.2, remaining))
                 control.check()
                 return subprocess.CompletedProcess(command, process.returncode, out, err)
             except subprocess.TimeoutExpired:
-                first = False
+                continue
     except KeyboardInterrupt:
         control.cancel()
         raise

@@ -16,7 +16,8 @@ h1,h2,h3{text-wrap:balance;margin:0}
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .top{background:var(--shell);color:#fff}
 .top .in{max-width:1080px;margin:0 auto;padding:0 20px;display:flex;align-items:center;gap:28px;min-height:56px;flex-wrap:wrap}
-.top .brand{font-size:16px;font-weight:650;letter-spacing:.02em;color:#fff;text-decoration:none;padding:14px 0}
+.top .brand{display:inline-flex;align-items:center;gap:10px;font-size:16px;font-weight:650;letter-spacing:.02em;color:#fff;text-decoration:none;padding:14px 0}
+.top .brand .logo{width:26px;height:26px;flex:none}
 .top nav{display:flex;gap:6px;flex:1}
 .top nav a{color:#cfe3da;text-decoration:none;padding:17px 12px 15px;border-bottom:2px solid transparent;font-weight:500}
 .top nav a:hover{color:#fff}
@@ -95,6 +96,17 @@ CSS_MORE = '''
 .pick{margin:12px 0 16px;padding:10px 12px;border-radius:8px;background:#f3f6f4;border:1px dashed #b3c3ba;min-height:56px}
 .pick.on{background:var(--tint);border:1px solid #9cc7b4}
 .pick b{display:block;word-break:break-all}
+.scope{border:0;margin:0 0 14px;padding:0}
+.scope legend{font-weight:600;font-size:13px;padding:0;margin-bottom:6px}
+.scope .opt{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;cursor:pointer;flex-wrap:wrap}
+.scope .opt.on{border-color:#7fb09b;background:var(--tint)}
+.scope .opt:not(.on) input[type=number]{opacity:.55}
+.scope input[type=number]{width:76px}
+.scope input[type=radio]{width:16px;height:16px;accent-color:var(--brand);margin:0}
+iframe.report{display:block;width:100%;height:calc(100vh - 150px);min-height:560px;border:0;background:#fff}
+.saved{margin:0 0 16px;padding:10px 12px;border-radius:8px;background:#f6f8f6;border:1px solid var(--line2);font-size:13px}
+.saved.warn{background:#fdf1ef;border-color:#e6b9b3}
+.saved .sv{display:flex;justify-content:space-between;gap:8px}
 tr.row-pick{cursor:pointer}
 tr.row-pick.sel{background:var(--tint)}
 tr.row-pick.sel:hover{background:var(--tint)}

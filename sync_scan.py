@@ -76,9 +76,22 @@ STOP = set(' \t\r\n"\'\\<>|*?,;()[]{}')
 NEEDLE = 'SKILL.md'
 
 
+BASE_MARK = 'Base directory for this skill: '
+
+
 def skill_paths_in(text):
-    """Absolute or ~/ paths ending in SKILL.md, found by walking back from each occurrence (linear time)."""
-    found, at = set(), text.find(NEEDLE)
+    """Absolute or ~/ paths ending in SKILL.md, found by walking back from each occurrence (linear time).
+    Claude Code's Skill tool prints only the directory, so those lines count too."""
+    found, at = set(), text.find(BASE_MARK)
+    while at != -1:
+        start = end = at + len(BASE_MARK)
+        while end < len(text) and text[end] not in STOP and end - start < 400:
+            end += 1
+        base = text[start:end].rstrip('/')
+        if base.startswith(('/', '~/')):
+            found.add(base + '/' + NEEDLE)
+        at = text.find(BASE_MARK, end)
+    at = text.find(NEEDLE)
     while at != -1:
         start = at
         while start > 0 and text[start - 1] not in STOP and at - start < 400:
@@ -101,7 +114,7 @@ def skill_dirs_in(paths, home, tick=None):
                 text = handle.read()
         except OSError:
             continue
-        if NEEDLE not in text:
+        if NEEDLE not in text and BASE_MARK not in text:
             continue
         for raw in skill_paths_in(text):
             candidate = Path(os.path.expanduser(raw) if raw.startswith('~') else raw)
@@ -111,6 +124,14 @@ def skill_dirs_in(paths, home, tick=None):
             except OSError:
                 continue
     return found
+
+
+SKILL_PARENT = re.compile(r'^(.+)/\.(?:agents|claude|codex)/skills$')
+
+
+def own_skill(directory):
+    """Skill kept in a repository or in the user's own .agents/.claude/.codex skills folder, not in a plugin cache or the bundled system set."""
+    return bool(SKILL_PARENT.match(str(directory).replace('\\', '/').rsplit('/', 1)[0]))
 
 
 def skill_key(directory):
