@@ -100,6 +100,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == '/api/sync/diff':
                 return self.send_json(200, store.diff(user, data.get('files') or []))
+            if path == '/api/sync/have':
+                return self.send_json(200, store.have(user, data.get('files') or [], not data.get('dry')))
             if path == '/api/sync/skills':
                 return self.send_json(200, {'saved': store.put_skills(user, data.get('entries') or [])})
         except jobs.JobError as exc:

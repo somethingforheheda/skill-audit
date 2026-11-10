@@ -19,26 +19,28 @@ def cmd(text):
 
 
 def connect_box(host, user):
+    install = ('mkdir -p ~/.local/bin && curl -fsS -o ~/.local/bin/skill-audit http://%s/download/skill-audit.pyz '
+               '&& chmod +x ~/.local/bin/skill-audit && export PATH="$HOME/.local/bin:$PATH"') % host
     return ('<div class="card"><h2>接入方法</h2><ol class="steps">'
-            '<li><h3>安装或更新 skill-audit</h3><p class="muted small">已装过的话运行下面这条就会升到最新版。</p>%s'
-            '<details class="fold" style="border:0;margin:8px 0 0;padding:0"><summary class="small">访问不了 GitHub？从这台服务器下载</summary>%s</details></li>'
+            '<li><h3>从这台服务器安装 skill-audit</h3><p class="muted small">需要 Python 3.9+，不用访问 GitHub。已经装过的跳过这一步；'
+            '装好后同步时会自动从这台服务器更新，不用手动升级。</p>%s'
+            '<p class="muted small">之后新开的终端如果提示找不到 skill-audit，把 <code>export PATH="$HOME/.local/bin:$PATH"</code> 加进 ~/.zshrc 或 ~/.bashrc。</p></li>'
             '<li><h3>绑定服务器和你的 id</h3>%s</li>'
             '<li><h3>先上传一次</h3><p class="muted small">会先告诉你要传多少，确认后才开始。</p>%s</li>'
-            '<li><h3>设置定时同步</h3><p class="muted small">之后每隔几小时自动同步。新版本会在同步时自动从服务器更新，不用手动升级。</p>%s</li>'
+            '<li><h3>设置定时同步</h3><p class="muted small">之后每隔几小时自动同步。</p>%s</li>'
             '</ol></div>') % (
-        cmd('skill-audit update'),
-        cmd('mkdir -p ~/.local/bin && curl -o ~/.local/bin/skill-audit http://%s/download/skill-audit.pyz && chmod +x ~/.local/bin/skill-audit' % host),
+        cmd(install),
         cmd('skill-audit sync init --server http://%s --user %s' % (host, user)),
         cmd('skill-audit sync run'), cmd('skill-audit sync install'))
 
 
 def users_page(user, host):
-    body = ('<div class="head"><div class="t"><h1>同事同步</h1><p class="muted">会话同步到服务器后，才能在这里选目录做分析。</p></div></div>'
+    body = ('<div class="head"><div class="t"><h1>团队接入</h1><p class="muted">把本机的 AI 会话同步到这台服务器后，才能在这里选目录做分析。</p></div></div>'
             + connect_box(host, user) +
             '<div class="card flush"><div class="ch"><h2>已同步的同事</h2></div><div class="tw"><table id="tbl" style="margin-top:10px"><thead><tr>'
             '<th>用户</th><th class="num">会话文件</th><th class="num">大小</th><th>来源</th><th class="num">Skill 目录</th><th>最近同步</th></tr></thead>'
             '<tbody id="rows"></tbody></table></div><div class="empty" id="empty">加载中…</div></div>')
-    return shell('同事同步', body, user, USERS_SCRIPT, 'users')
+    return shell('团队接入', body, user, USERS_SCRIPT, 'users')
 
 
 USER_SCRIPT = OPTS_JS + '''
@@ -58,7 +60,7 @@ function draw(){
       '</td><td>'+rel(p.last)+'</td>'+(mine?'<td>'+(ALL?'<button class="ghost sm" type="button" data-sess="1">会话归属</button> ':'')+'<button class="ghost sm" type="button" aria-pressed="'+on+'">'+(on?'已选':'选择')+'</button></td>':'')+'</tr>'}).join('');
   gid('tbl').hidden=!rows.length;gid('empty').hidden=rows.length>0;
   gid('empty').innerHTML=projects.length?'<b>没有匹配的目录</b>换个关键词试试。':
-    '<b>还没有同步数据</b>'+(mine?'先到<a href="/users">「同事同步」</a>按步骤接入。':'这位同事还没有同步过。');
+    '<b>还没有同步数据</b>'+(mine?'先到<a href="/users">「团队接入」</a>按步骤接入。':'这位同事还没有同步过。');
 }
 function choose(v){chosen=v;pickBox();draw()}
 async function showSessions(name){

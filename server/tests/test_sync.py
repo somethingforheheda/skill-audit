@@ -155,6 +155,81 @@ class SyncTests(SyncBase):
         self.assertNotIn('skills', sync_client.load_config())
 
 
+class DedupeTests(SyncBase):
+    def project_file(self):
+        return self.home / '.claude' / 'projects' / '-work-app' / 's1.jsonl'
+
+    def test_same_content_with_a_new_timestamp_is_not_uploaded_again(self):
+        sync_client.cmd_init(self.args(user='dora', quiet=True))
+        sync_client.cmd_run(self.args(user='dora', quiet=True))
+        before = dict(store.state('dora')['files'])
+        later = time.time() + 5000
+        os.utime(str(self.project_file()), (later, later))
+        self.assertEqual(sync_client.cmd_run(self.args(user='dora', quiet=True)), 0)
+        after = store.state('dora')['files']
+        row = after['claude/-work-app/s1.jsonl']
+        self.assertEqual(row['m'], int(later))
+        self.assertEqual(row['t'] >= before['claude/-work-app/s1.jsonl']['t'], True)
+        self.assertEqual(sorted(after), sorted(before))
+        self.assertEqual(sync_client.plan(self.args(user='dora'), sync_client.Client(self.url, 'dora'), self.home)[0], [])
+
+    def test_a_copy_under_another_name_is_recorded_but_neither_stored_nor_counted(self):
+        sync_client.cmd_init(self.args(user='emil', quiet=True))
+        sync_client.cmd_run(self.args(user='emil', quiet=True))
+        size = store.state('emil')['bytes']
+        copy = self.project_file().with_name('s1-copy.jsonl')
+        copy.write_bytes(self.project_file().read_bytes())
+        sync_client.cmd_run(self.args(user='emil', quiet=True))
+        files = store.state('emil')['files']
+        self.assertEqual(files['claude/-work-app/s1-copy.jsonl']['dup'], 'claude/-work-app/s1.jsonl')
+        self.assertFalse((store.user_dir('emil') / 'sessions' / 'claude' / '-work-app' / 's1-copy.jsonl').exists())
+        self.assertEqual(store.state('emil')['bytes'], size)
+        self.assertEqual(browse.summary('emil')['files'], 3)
+        self.assertNotIn('claude/-work-app/s1-copy.jsonl', browse.select('emil'))
+        self.assertEqual(sync_client.plan(self.args(user='emil'), sync_client.Client(self.url, 'emil'), self.home)[0], [])
+
+    def test_a_browser_style_upload_of_known_content_is_dropped_on_the_server(self):
+        sync_client.cmd_init(self.args(user='fay', quiet=True))
+        sync_client.cmd_run(self.args(user='fay', quiet=True))
+        client = sync_client.Client(self.url, 'fay')
+        path = self.project_file()
+        client.upload({'s': 'claude', 'rel': '-work-app/other-name.jsonl', 'size': path.stat().st_size, 'mt': 1, 'abs': str(path)})
+        row = store.state('fay')['files']['claude/-work-app/other-name.jsonl']
+        self.assertEqual(row['dup'], 'claude/-work-app/s1.jsonl')
+        self.assertFalse((store.user_dir('fay') / 'sessions' / 'claude' / '-work-app' / 'other-name.jsonl').exists())
+
+    def test_rows_carry_the_uploader_and_old_data_can_be_hashed_and_deduplicated(self):
+        user = 'gus'
+        base = store.user_dir(user) / 'sessions' / 'claude' / 'p'
+        base.mkdir(parents=True)
+        for name, text in (('a.jsonl', 'same\n'), ('b.jsonl', 'same\n'), ('c.jsonl', 'other\n')):
+            (base / name).write_text(text, encoding='utf-8')
+            store.append(user, {'k': 'claude/p/' + name, 's': len(text), 'm': 5, 'p': '/w/x'})
+        self.assertEqual(store.dedupe_user(user), (3, 1))
+        files = store.state(user)['files']
+        self.assertEqual(files['claude/p/b.jsonl']['dup'], 'claude/p/a.jsonl')
+        self.assertNotIn('dup', files['claude/p/a.jsonl'])
+        self.assertEqual(store.state(user)['bytes'], 5 + 6)
+        self.assertEqual(store.dedupe_user(user), (0, 0))
+        self.assertTrue(all(json.loads(line)['u'] == user for line in (store.user_dir(user) / 'journal.jsonl').read_text().splitlines()))
+
+    def test_analysis_by_explicit_keys_resolves_copies_and_keeps_the_sessions(self):
+        sync_client.cmd_init(self.args(user='hana', quiet=True))
+        sync_client.cmd_run(self.args(user='hana', quiet=True))
+        copy = self.project_file().with_name('dup.jsonl')
+        copy.write_bytes(self.project_file().read_bytes())
+        sync_client.cmd_run(self.args(user='hana', quiet=True))
+        meta = runner.create_from_store('hana', {'keys': ['claude/-work-app/dup.jsonl', 'claude/-work-app/s1.jsonl', 'claude/nope.jsonl']})
+        self.assertEqual(meta['files'], 1)
+        for _ in range(100):
+            row = jobs.get(meta['id'])
+            if row['status'] in ('done', 'failed'):
+                break
+            time.sleep(0.2)
+        self.assertTrue((config.JOBS / meta['id'] / 'home').is_dir())
+        self.assertTrue((store.user_dir('hana') / 'sessions' / 'claude' / '-work-app' / 's1.jsonl').is_file())
+
+
 class JobCatalogTests(unittest.TestCase):
     def put(self, user, key, origin):
         folder = store.user_dir(user) / 'skills' / key
@@ -357,10 +432,10 @@ class ProgressTests(unittest.TestCase):
 class VisibleProgressTests(SyncBase):
     def test_run_reports_each_phase_and_the_bytes_sent(self):
         import contextlib
-        sync_client.cmd_init(self.args(user='gina'))
+        sync_client.cmd_init(self.args(user='ivor'))
         out = TtyBuffer()
         with contextlib.redirect_stdout(out):
-            code = sync_client.cmd_run(self.args(user='gina', quiet=False))
+            code = sync_client.cmd_run(self.args(user='ivor', quiet=False))
         text = out.getvalue()
         self.assertEqual(code, 0)
         for part in ('读取工作目录', '查找读过的 Skill', '上传', '100%', '完成：会话 3 个成功'):

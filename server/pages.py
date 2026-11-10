@@ -22,7 +22,7 @@ const MODEL_OK=v=>!v||/^[A-Za-z0-9][A-Za-z0-9._:\\/\\[\\] -]{0,80}$/.test(v);
 document.addEventListener('click',e=>{
   const b=e.target.closest('.cmd button');if(!b)return;
   const text=b.parentNode.querySelector('pre').textContent;
-  const done=()=>{b.textContent='已复制';setTimeout(()=>{b.textContent='复制'},1500)};
+  const was=b.textContent,done=()=>{b.textContent='已复制';setTimeout(()=>{b.textContent=was},1500)};
   if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(text).then(done)}
   else{const t=document.createElement('textarea');t.value=text;t.style.position='fixed';t.style.opacity='0';
     document.body.appendChild(t);t.select();try{document.execCommand('copy');done()}catch(x){}t.remove()}
@@ -96,7 +96,7 @@ def shell(title, body, user=None, script='', active=''):
     nav = right = ''
     if user:
         nav = ('<nav aria-label="主导航">%s%s%s%s%s</nav>' % (
-            link('jobs', '/', '分析任务'), link('me', '/u/' + esc(user), '我的会话'), link('users', '/users', '同事同步'), link('all', '/all', '全部会话') if auth.is_admin(user) else '', link('settings', '/settings', '设置')))
+            link('jobs', '/', '分析任务'), link('me', '/u/' + esc(user), '我的会话'), link('users', '/users', '团队接入'), link('all', '/all', '全部会话') if auth.is_admin(user) else '', link('settings', '/settings', '设置')))
         right = ('<div class="who"><span>%s</span><form method="post" action="/logout" style="margin:0">'
                  '<button class="ghost sm">退出</button></form></div>') % esc(user)
     return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'

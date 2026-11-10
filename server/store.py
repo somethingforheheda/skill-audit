@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -30,7 +31,7 @@ def state(user):
         raise jobs.JobError('用户名不合法', 400)
     with LOCK:
         if user not in CACHE:
-            st = {'files': {}, 'skills': {}, 'bytes': 0, 'last': 0}
+            st = {'files': {}, 'skills': {}, 'bytes': 0, 'last': 0, 'hashes': {}}
             try:
                 with open(str(_journal(user)), encoding='utf-8') as handle:
                     for line in handle:
@@ -47,8 +48,20 @@ def state(user):
 def apply(st, row):
     if 'k' in row:
         old = st['files'].get(row['k'])
-        st['bytes'] += row['s'] - (old['s'] if old else 0)
-        st['files'][row['k']] = {'s': row['s'], 'm': row['m'], 'p': row.get('p', ''), 't': row.get('t', 0)}
+        if old:
+            st['bytes'] -= old.get('b', old['s'])
+            if old.get('h') and st['hashes'].get(old['h']) == row['k']:
+                del st['hashes'][old['h']]
+        held = 0 if row.get('dup') else row['s']
+        st['bytes'] += held
+        entry = {'s': row['s'], 'm': row['m'], 'p': row.get('p', ''), 't': row.get('t', 0), 'b': held}
+        if row.get('h'):
+            entry['h'] = row['h']
+            if not row.get('dup'):
+                st['hashes'][row['h']] = row['k']
+        if row.get('dup'):
+            entry['dup'] = row['dup']
+        st['files'][row['k']] = entry
     elif 'skill' in row:
         st['skills'][row['skill']] = {'origin': row.get('origin', ''), 'name': row.get('name', '')}
     st['last'] = max(st['last'], row.get('t', 0))
@@ -56,6 +69,7 @@ def apply(st, row):
 
 def append(user, row):
     row['t'] = int(time.time())
+    row['u'] = user
     st = state(user)
     with LOCK:
         user_dir(user).mkdir(parents=True, exist_ok=True)
@@ -108,8 +122,9 @@ def store_file(user, source, rel, mt, proj, reader, length):
     if length <= 0 or length > cap:
         raise jobs.JobError('文件为空或过大', 413)
     st = state(user)
-    old = st['files'].get(key_of(source, rel))
-    if st['bytes'] + length - (old['s'] if old else 0) > config.USER_QUOTA_GB * 1024 * MB:
+    key = key_of(source, rel)
+    old = st['files'].get(key)
+    if st['bytes'] + length - (old.get('b', old['s']) if old else 0) > config.USER_QUOTA_GB * 1024 * MB:
         raise jobs.JobError('已超过个人存储上限 %d GB' % config.USER_QUOTA_GB, 413)
     free = shutil.disk_usage(str(config.DATA)).free
     if free < config.MIN_FREE_GB * 1024 * MB:
@@ -118,6 +133,7 @@ def store_file(user, source, rel, mt, proj, reader, length):
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + '.part')
     left = length
+    digest = hashlib.sha256()
     try:
         with open(str(tmp), 'wb') as out:
             while left:
@@ -125,7 +141,18 @@ def store_file(user, source, rel, mt, proj, reader, length):
                 if not block:
                     raise jobs.JobError('上传中断', 400)
                 out.write(block)
+                digest.update(block)
                 left -= len(block)
+        content = digest.hexdigest()
+        row = {'k': key, 's': length, 'm': mt, 'p': proj[:300], 'h': content}
+        if source != 'skill':
+            twin = st['hashes'].get(content)
+            if twin and twin != key:
+                tmp.unlink()
+                return append(user, dict(row, dup=twin))
+            if old and old.get('h') == content and not old.get('dup'):
+                tmp.unlink()
+                return append(user, row)
         os.replace(str(tmp), str(target))
     except BaseException:
         try:
@@ -133,7 +160,68 @@ def store_file(user, source, rel, mt, proj, reader, length):
         except OSError:
             pass
         raise
-    append(user, {'k': key_of(source, rel), 's': length, 'm': mt, 'p': proj[:300]})
+    append(user, row)
+
+
+def have(user, entries, record=True):
+    """Which of the entries (with their SHA-256) still have to be uploaded; same content under another name is only noted."""
+    st = state(user)
+    need = []
+    for i, e in enumerate(entries):
+        try:
+            source, rel, size, mt, content = e['s'], e['rel'], int(e['size']), int(e['mt']), str(e['h'])
+        except (KeyError, TypeError, ValueError):
+            need.append(i)
+            continue
+        key = key_of(source, rel)
+        if not check(source, rel) or size <= 0 or source == 'skill' or not re.match(r'^[0-9a-f]{64}$', content):
+            need.append(i)
+            continue
+        mine = st['files'].get(key)
+        twin = st['hashes'].get(content)
+        if mine and mine.get('h') == content and not mine.get('dup'):
+            row = {'k': key, 's': size, 'm': mt, 'p': mine.get('p', ''), 'h': content}
+        elif twin and twin != key:
+            row = {'k': key, 's': size, 'm': mt, 'p': (mine or {}).get('p', ''), 'h': content, 'dup': twin}
+        else:
+            need.append(i)
+            continue
+        if record and (not mine or mine['s'] != size or mine['m'] != mt or mine.get('dup') != row.get('dup')):
+            append(user, row)
+    return {'need': need}
+
+
+def resolve(user, key):
+    row = state(user)['files'].get(key)
+    return row['dup'] if row and row.get('dup') else key
+
+
+def dedupe_user(user):
+    """Hash what is already stored and mark later copies of the same content; no file is removed. Returns (hashed, duplicates)."""
+    st = state(user)
+    todo = sorted((k for k, r in st['files'].items() if 'h' not in r and not r.get('dup') and k.split('/', 1)[0] in config.SOURCES),
+                  key=lambda k: (st['files'][k].get('t', 0), k))
+    hashed = dupes = 0
+    for key in todo:
+        row = st['files'][key]
+        source, rel = key.split('/', 1)
+        path = user_dir(user).joinpath(*check(source, rel))
+        try:
+            digest = hashlib.sha256()
+            with open(str(path), 'rb') as handle:
+                for block in iter(lambda: handle.read(1 << 20), b''):
+                    digest.update(block)
+        except OSError:
+            continue
+        content = digest.hexdigest()
+        twin = st['hashes'].get(content)
+        out = {'k': key, 's': row['s'], 'm': row['m'], 'p': row.get('p', ''), 'h': content}
+        if twin and twin != key:
+            out['dup'] = twin
+            dupes += 1
+        append(user, out)
+        hashed += 1
+    return hashed, dupes
 
 
 def put_skills(user, entries):

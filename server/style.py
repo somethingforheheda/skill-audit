@@ -104,6 +104,13 @@ CSS_MORE = '''
 .scope input[type=number]{width:76px}
 .scope input[type=radio]{width:16px;height:16px;accent-color:var(--brand);margin:0}
 iframe.report{display:block;width:100%;height:calc(100vh - 150px);min-height:560px;border:0;background:#fff}
+button#ws-btn.ghost:not(:disabled){background:var(--brand);border-color:var(--brand);color:#fff}
+.wsbox,.confirm{margin:0 0 16px;padding:12px;border:1px solid var(--line);border-radius:8px;background:#fbfcfb}
+.confirm{background:var(--tint);border-color:#9cc7b4}.confirm p{margin:6px 0}
+.wslist{max-height:260px;overflow:auto;border:1px solid var(--line2);border-radius:8px;background:#fff}
+.wsrow{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line2);cursor:pointer;font-weight:400}
+.wslist .wsrow:last-child{border-bottom:0}.wsrow>span:nth-child(2){flex:1;min-width:0}.wsrow .sub{display:block;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
+.wsrow input{width:16px;height:16px;margin-top:3px;accent-color:var(--brand)}
 .saved{margin:0 0 16px;padding:10px 12px;border-radius:8px;background:#f6f8f6;border:1px solid var(--line2);font-size:13px}
 .saved.warn{background:#fdf1ef;border-color:#e6b9b3}
 .saved .sv{display:flex;justify-content:space-between;gap:8px}

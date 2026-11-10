@@ -27,7 +27,7 @@ MAX_FILE_MB = int(os.environ.get('SA_MAX_FILE_MB', '200'))
 MAX_JOB_MB = int(os.environ.get('SA_MAX_JOB_MB', '1500'))
 MIN_FREE_GB = int(os.environ.get('SA_MIN_FREE_GB', '5'))
 USER_QUOTA_GB = int(os.environ.get('SA_USER_QUOTA_GB', '10'))
-KEEP_UPLOADS = os.environ.get('SA_KEEP_UPLOADS', '') == '1'
+KEEP_UPLOADS = os.environ.get('SA_KEEP_UPLOADS', '1') != '0'
 SECURE_COOKIE = os.environ.get('SA_SECURE_COOKIE', '') == '1'
 
 JOBS = DATA / 'jobs'

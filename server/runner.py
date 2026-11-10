@@ -165,7 +165,18 @@ def create_from_store(user, options):
     jid = meta['id']
     project = str(options.get('project') or '*')[:200]
     days = jobs._clamp(options.get('days'), 1, 3650, 0) if options.get('days') else None
-    items = browse.select_all(project, days) if everyone else [(user, k) for k in browse.select(user, project, days)]
+    if everyone:
+        items = browse.select_all(project, days)
+    elif isinstance(options.get('keys'), list):
+        mine = store.state(user)['files']
+        picked = []
+        for raw in options['keys'][:5000]:
+            k = store.resolve(user, str(raw))
+            if k in mine and k not in picked:
+                picked.append(k)
+        items = [(user, k) for k in picked]
+    else:
+        items = [(user, k) for k in browse.select(user, project, days)]
     count, sources, size = browse.link_sessions(jid, items)
     if not count:
         shutil.rmtree(str(jobs.job_dir(jid)), ignore_errors=True)
@@ -175,7 +186,7 @@ def create_from_store(user, options):
                  'size': store.state(u)['files'][k]['s']} for u, k in items]
         (jobs.job_dir(jid) / 'owners.json').write_text(json.dumps(rows, ensure_ascii=False), encoding='utf-8')
     keep_key(jid, key)
-    catalog, roots = browse.job_catalog(jid, sorted({u for u, _ in items}), options.get('project') or None, days)
+    catalog, roots = browse.job_catalog(jid, sorted({u for u, _ in items}), options.get('project') or None, days, items)
     return jobs.update(jid, status='queued', message='排队中', queued=int(time.time()), sources=sources,
                        files=count, bytes=size, project=project, days=days or 0, catalog=str(catalog), skills_roots=roots,
                        all_users=everyone)

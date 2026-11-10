@@ -60,6 +60,10 @@ class WebTests(unittest.TestCase):
         self.assertEqual(res.status, 302)
         return res.getheader('Set-Cookie').split(';')[0]
 
+    def admin_cookie(self, name):
+        import auth
+        return 'sa_user=%s.%s' % (name, auth._sign(name))
+
     def api(self, method, path, cookie, body=None):
         res, data = self.call(method, path, body, cookie, H)
         return res.status, data
@@ -132,6 +136,31 @@ class WebTests(unittest.TestCase):
                     time.sleep(0.2)
             finally:
                 key_file.unlink()
+
+    def test_manual_upload_form_has_workspace_filter_and_duplicate_confirmation(self):
+        import shutil as sh
+        import subprocess
+        import tempfile
+        res, data = self.call('GET', '/', cookie=self.login())
+        text = data.decode()
+        for needle in ('id="ws-btn"', 'id="ws-list"', 'id="cf-dup"', 'id="cf-ok"', 'id="cf-back"'):
+            self.assertIn(needle, text)
+        self.assertIn('id="go" disabled type="button" hidden', text)
+        self.assertIn('id="go-up"', text)
+        self.assertIn('不需要填 API Key', text)
+        from unittest import mock
+        with mock.patch.object(config, 'ADMINS', ['alice']):
+            res, data = self.call('GET', '/', cookie=self.admin_cookie('alice'))
+        self.assertNotIn('id="go" disabled type="button" hidden', data.decode())
+        if sh.which('node'):
+            script = text.split('<script>')[1].split('</script>')[0]
+            with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as handle:
+                handle.write('new Function(%s)' % json.dumps(script))
+            try:
+                done = subprocess.run(['node', handle.name], capture_output=True, text=True)
+            finally:
+                os.unlink(handle.name)
+            self.assertEqual(done.returncode, 0, done.stderr)
 
     def test_api_needs_header_and_login(self):
         cookie = self.login()
@@ -334,7 +363,7 @@ class WebTests(unittest.TestCase):
         self.assertIn('stub report: 1 files', text)
         self.assertIn('--sources', text)
         self.assertIn(str(config.RUNNER_HOME), text)
-        self.assertFalse(os.path.exists(os.path.join(config.JOBS, jid, 'home')))
+        self.assertTrue(os.path.exists(os.path.join(config.JOBS, jid, 'home')))
         res, _ = self.call('GET', '/r/%s/../job.json' % jid, cookie=cookie)
         self.assertEqual(res.status, 404)
         res, _ = self.call('GET', '/r/%s/report.html' % jid)

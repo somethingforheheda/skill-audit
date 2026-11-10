@@ -1,6 +1,7 @@
 """Team sync client: upload local AI-session history and the Skills it read to a team server."""
 import http.client
 import io
+import hashlib
 import json
 import os
 import re
@@ -292,6 +293,40 @@ def auto_update(args, client, cfg, restart=restart):
     return True
 
 
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for block in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def drop_known(args, client, need, dry=False):
+    """Hash what looks new or changed and let the server say which of it it already holds (same content under another name or timestamp)."""
+    if not need:
+        return need, 0
+    bar = Progress('核对内容是否重复', len(need), enabled=not args.quiet)
+    for number, r in enumerate(need, 1):
+        try:
+            r['h'] = sha256_of(r['abs'])
+        except OSError:
+            r['h'] = ''
+        bar.update(number)
+    bar.finish()
+    keep = set()
+    try:
+        for start in range(0, len(need), 500):
+            chunk = need[start:start + 500]
+            reply = client.post('/api/sync/have', {'files': [{'s': r['s'], 'rel': r['rel'], 'size': r['size'], 'mt': r['mt'], 'h': r['h']} for r in chunk],
+                                                   'dry': dry})
+            keep.update(start + i for i in reply.get('need', []))
+    except SyncError as exc:
+        say(args, '服务器不支持内容核对，按文件时间上传：%s' % exc)
+        return need, 0
+    kept = [r for i, r in enumerate(need) if i in keep]
+    return kept, len(need) - len(kept)
+
+
 def plan(args, client, home):
     files, skipped = sync_scan.scan(home, args.days)
     return client.diff(files), len(files), skipped
@@ -303,9 +338,11 @@ def cmd_run(args):
     auto_update(args, client, cfg)
     home = Path(os.path.expanduser(args.history_home)) if args.history_home else Path.home()
     need, total, skipped = plan(args, client, home)
+    need, same = drop_known(args, client, need, args.dry_run)
     size = sum(r['size'] for r in need)
-    say(args, '本机共 %d 个会话文件，需要上传 %d 个（%s）%s' % (
-        total, len(need), human(size), '，另有 %d 个超过 128 MB 的已跳过' % len(skipped) if skipped else ''))
+    say(args, '本机共 %d 个会话文件，需要上传 %d 个（%s）%s%s' % (
+        total, len(need), human(size), '，另有 %d 个超过 128 MB 的已跳过' % len(skipped) if skipped else '',
+        '，%d 个内容和服务器上已有的相同，不重复上传' % same if same else ''))
     if args.dry_run:
         for r in need[:20]:
             say(args, '  %s/%s  %s' % (r['s'], r['rel'], human(r['size'])))

@@ -21,7 +21,7 @@ def summary(user, with_projects=True):
     st = store.state(user)
     sources, projects, files, size = {}, {}, 0, 0
     for key, row in st['files'].items():
-        if not is_session(key):
+        if not is_session(key) or row.get('dup'):
             continue
         source = key.split('/', 1)[0]
         files += 1
@@ -66,7 +66,7 @@ def select(user, project=None, days=None):
     since = time.time() - days * 86400 if days else 0
     chosen = []
     for key, row in st.items():
-        if not is_session(key) or row['m'] < since:
+        if not is_session(key) or row['m'] < since or row.get('dup'):
             continue
         if project and project != '*' and project_name(row['p']) != project:
             continue
@@ -186,13 +186,14 @@ def pick_skills(users, projects):
     return {name: (user, key, origin) for name, key, user, origin in sorted(ranked.get(2) or ranked.get(1) or [])}
 
 
-def job_catalog(jid, users, project=None, days=None):
+def job_catalog(jid, users, project=None, days=None, items=None):
     """Hard-linked copies of the Skills this job should look at, plus the directories reads are limited to."""
     import jobs
     projects = set()
     for user in users:
         files = store.state(user)['files']
-        projects |= {files[k]['p'].replace('\\', '/').rstrip('/') for k in select(user, project, days) if files[k]['p']}
+        keys = [k for u, k in items if u == user] if items is not None else select(user, project, days)
+        projects |= {files[k]['p'].replace('\\', '/').rstrip('/') for k in keys if files[k]['p']}
     best = pick_skills(users, projects)
     catalog = jobs.job_dir(jid) / 'catalog'
     catalog.mkdir(parents=True, exist_ok=True)
